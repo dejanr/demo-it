@@ -3,14 +3,26 @@
 `demo-it` runs transcript-driven demonstrations and presentations via CLI and Neovim frontends.
 
 It provides:
+
 - `demo-itd` daemon: canonical run state + tmux orchestration + idempotent execution
 - `demo-it` CLI: command client for terminal and Neovim plugin
 - protocol + state machine boundaries with tests
 
 Neovim is intentionally a thin client:
+
 - keymaps and command forwarding
 - slide/speaker rendering
 - no canonical execution state in the editor
+
+## Attribution
+
+This project is strongly inspired by Howard Abrams' [`demo-it`](https://github.com/howardabrams/demo-it).
+I watched his presentation a long time ago, and it stayed with me.
+Many ideas here are a direct nod to his work.
+
+## License
+
+This project is licensed under the MIT License (see `LICENSE`).
 
 ## Project layout
 
@@ -24,6 +36,7 @@ Neovim is intentionally a thin client:
 ## Status
 
 M2 foundation in place:
+
 - protocol draft + validation tests
 - core state machine + transition tests
 - daemon socket server with in-memory run service
@@ -36,6 +49,29 @@ M2 foundation in place:
 - common checks: `fmt`, `lint`, `tests`, `build`, `ci`
 - shared formatting config: `treefmt.toml` (used by both `nix fmt` and `fmt`)
 - `devenv up` runs `demo-itd` with auto-reload via `.air.toml`
+
+## Home Manager module (user daemon)
+
+A Home Manager module is exported as `homeManagerModules.default` (alias: `homeManagerModules.demo-it`) so you can run `demo-itd` as a user service.
+
+```nix
+{
+  imports = [ inputs.demo-it.homeManagerModules.default ];
+
+  services.demo-it = {
+    enable = true;
+    # optional:
+    # socketPath = "$HOME/.local/state/demo-it/demo-it.sock";
+    # extraArgs = [ ];
+  };
+}
+```
+
+When enabled, the module:
+
+- installs `demo-it` and `demo-itd`
+- starts `systemd --user` service `demo-itd`
+- exports `DEMO_IT_SOCKET` (by default) so CLI commands target the same daemon
 
 ## Quick tmux workspace bootstrap
 
@@ -53,12 +89,14 @@ demo-it ./examples/demo
 ```
 
 For `examples/demo`, this creates:
+
 - `demo-demo`
 - `demo-notes`
 
 It opens/switches to `demo-demo`; open `demo-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing.
 
 Session utilities:
+
 - `demo-it list` lists managed demo-it workspaces with numeric indexes (demo session per workspace)
 - `demo-it notes` opens the notes session for the latest workspace
 - `demo-it kill` kills all managed demo-it tmux sessions
@@ -69,14 +107,17 @@ If `demo-it.md` contains `demo-it` fenced blocks, bootstrap runs the first block
 ## Neovim plugin (local development)
 
 The repository now includes a local plugin runtime:
+
 - `plugin/demo-it.lua`
 - `lua/demo-it/init.lua`
 
 To iterate quickly from Neovim:
+
 1. `:set rtp+=/home/dejanr/projects/demo-it`
 2. `:DemoItReload`
 
 Available commands:
+
 - `:DemoItStart [workspace-path]` (defaults to current working directory)
 - `:DemoItStatus`, `:DemoItNext`, `:DemoItPrev`
 - `:DemoItRerun`, `:DemoItReloadState`
@@ -85,4 +126,5 @@ Available commands:
 - `:DemoIt <raw cli args...>`
 
 Formatting alignment tip:
+
 - configure Neovim formatters to call `treefmt --stdin <file> --quiet` so editor formatting matches `nix fmt`/`fmt`.

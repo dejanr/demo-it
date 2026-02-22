@@ -22,6 +22,11 @@
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [ inputs.devenv.flakeModule ];
 
+      flake.homeManagerModules = {
+        default = import ./nix/home-manager/demo-it.nix;
+        demo-it = import ./nix/home-manager/demo-it.nix;
+      };
+
       systems = [
         "x86_64-linux"
         "aarch64-linux"
@@ -43,7 +48,12 @@
             '';
           };
 
-          packages.default = config.devenv.shells.default.config.ci;
+          packages = let
+            demoItPackage = pkgs.callPackage ./nix/package.nix { };
+          in {
+            demo-it = demoItPackage;
+            default = demoItPackage;
+          };
 
           devenv.shells.default = {
             name = "demo-it";
