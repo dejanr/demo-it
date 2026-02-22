@@ -12,6 +12,11 @@ This resets and creates:
 
 It opens/switches to `demo-demo`.
 
-`demo-it.md` includes two `demo-it` blocks:
-1. open Neovim (`insert-text` + `key:return`)
-2. split tmux pane (`key:C-s` + `key:v`)
+`demo-it.md` includes five `demo-it` blocks:
+1. open Neovim directly on intro slide (`slide: slides/1-intro.1`)
+2. split tmux pane to the right (`split-pane`)
+3. open split slide (`slide: slides/2-split.2`)
+4. clear panes and split downward (`clear-panes` + `split-pane-vertical`)
+5. open wrap-up slide (`slide: slides/3-end.2`)
+
+`demo-notes` opens Neovim with speaker notes for the current block and refreshes on `demo-it next`.
