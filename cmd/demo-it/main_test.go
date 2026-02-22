@@ -3,6 +3,8 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"github.com/dejanr/demo-it/internal/transcript"
 )
 
 func TestTmuxKeyNormalizesReturn(t *testing.T) {
@@ -14,12 +16,37 @@ func TestTmuxKeyNormalizesReturn(t *testing.T) {
 	}
 }
 
+func TestFormatOpenSlideCommand(t *testing.T) {
+	got := formatOpenSlideCommand("slides/intro.md")
+	want := ":execute 'edit ' . fnameescape('slides/intro.md')"
+	if got != want {
+		t.Fatalf("formatOpenSlideCommand() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatOpenSlideCommandEscapesSingleQuote(t *testing.T) {
+	got := formatOpenSlideCommand("slides/it's.md")
+	want := ":execute 'edit ' . fnameescape('slides/it''s.md')"
+	if got != want {
+		t.Fatalf("formatOpenSlideCommand() = %q, want %q", got, want)
+	}
+}
+
 func TestIsProtocolCommand(t *testing.T) {
 	if !isProtocolCommand("next") {
 		t.Fatal("expected next to be protocol command")
 	}
 	if isProtocolCommand("./examples/demo") {
 		t.Fatal("path should not be protocol command")
+	}
+}
+
+func TestShouldAutoStartOnRunNotFound(t *testing.T) {
+	if !shouldAutoStartOnRunNotFound("prev") {
+		t.Fatal("prev should auto start")
+	}
+	if shouldAutoStartOnRunNotFound("status") {
+		t.Fatal("status should not auto start")
 	}
 }
 
@@ -35,30 +62,110 @@ func TestIsLegacyDemoSession(t *testing.T) {
 	}
 }
 
-func TestSelectSessionsToKill(t *testing.T) {
-	sessions := []string{"a-demo", "a-notes", "b-demo"}
+func TestSelectWorkspacesToKill(t *testing.T) {
+	workspaces := []managedWorkspace{
+		{Display: "a-demo", SessionNames: []string{"a-demo", "a-notes"}},
+		{Display: "b-demo", SessionNames: []string{"b-demo", "b-notes"}},
+	}
 
-	all, err := selectSessionsToKill(sessions, nil)
+	all, err := selectWorkspacesToKill(workspaces, nil)
 	if err != nil {
 		t.Fatalf("select all: %v", err)
 	}
-	if !reflect.DeepEqual(all, sessions) {
-		t.Fatalf("select all = %#v, want %#v", all, sessions)
+	if !reflect.DeepEqual(all, workspaces) {
+		t.Fatalf("select all = %#v, want %#v", all, workspaces)
 	}
 
-	some, err := selectSessionsToKill(sessions, []string{"2", "1", "2"})
+	some, err := selectWorkspacesToKill(workspaces, []string{"2", "1", "2"})
 	if err != nil {
 		t.Fatalf("select some: %v", err)
 	}
-	wantSome := []string{"a-notes", "a-demo"}
+	wantSome := []managedWorkspace{workspaces[1], workspaces[0]}
 	if !reflect.DeepEqual(some, wantSome) {
 		t.Fatalf("select some = %#v, want %#v", some, wantSome)
 	}
 
-	if _, err := selectSessionsToKill(sessions, []string{"x"}); err == nil {
+	if _, err := selectWorkspacesToKill(workspaces, []string{"x"}); err == nil {
 		t.Fatal("expected error for non-numeric index")
 	}
-	if _, err := selectSessionsToKill(sessions, []string{"9"}); err == nil {
+	if _, err := selectWorkspacesToKill(workspaces, []string{"9"}); err == nil {
 		t.Fatal("expected error for out-of-range index")
+	}
+}
+
+func TestGroupManagedWorkspacesMergesDemoAndNotes(t *testing.T) {
+	sessions := []managedSession{
+		{Name: "a-demo", Role: "demo", Workspace: "/tmp/a", LastAttached: 10},
+		{Name: "a-notes", Role: "notes", Workspace: "/tmp/a", LastAttached: 9},
+	}
+
+	workspaces := groupManagedWorkspaces(sessions)
+	if len(workspaces) != 1 {
+		t.Fatalf("expected 1 workspace, got %d", len(workspaces))
+	}
+	if workspaces[0].Display != "a-demo" {
+		t.Fatalf("unexpected workspace display: %s", workspaces[0].Display)
+	}
+}
+
+func TestSelectWorkspaceSessionsChoosesLatestWorkspace(t *testing.T) {
+	sessions := []managedSession{
+		{Name: "a-demo", Role: "demo", Workspace: "/tmp/a", Step: 1, LastAttached: 10},
+		{Name: "a-notes", Role: "notes", Workspace: "/tmp/a", Step: 1, LastAttached: 10},
+		{Name: "b-demo", Role: "demo", Workspace: "/tmp/b", Step: 2, LastAttached: 20},
+		{Name: "b-notes", Role: "notes", Workspace: "/tmp/b", Step: 2, LastAttached: 20},
+	}
+
+	demo, notes, ok := selectWorkspaceSessions(sessions)
+	if !ok {
+		t.Fatal("expected workspace sessions")
+	}
+	if demo.Name != "b-demo" {
+		t.Fatalf("unexpected demo session: %s", demo.Name)
+	}
+	if notes == nil || notes.Name != "b-notes" {
+		t.Fatalf("unexpected notes session: %#v", notes)
+	}
+}
+
+func TestSelectPaneToKeep(t *testing.T) {
+	panes := []paneState{{ID: "%9", Index: 2}, {ID: "%1", Index: 0}, {ID: "%2", Index: 1}}
+	if got := selectPaneToKeep(panes); got != "%1" {
+		t.Fatalf("selectPaneToKeep = %q, want %%1", got)
+	}
+}
+
+func TestResolveStepTransition(t *testing.T) {
+	next, execute := resolveStepTransition(0, 3, "next")
+	if next != 1 || !execute {
+		t.Fatalf("next transition = (%d,%v), want (1,true)", next, execute)
+	}
+
+	prev, execute := resolveStepTransition(1, 3, "prev")
+	if prev != 0 || execute {
+		t.Fatalf("prev transition = (%d,%v), want (0,false)", prev, execute)
+	}
+
+	stays, execute := resolveStepTransition(0, 3, "prev")
+	if stays != 0 || execute {
+		t.Fatalf("prev-at-start transition = (%d,%v), want (0,false)", stays, execute)
+	}
+}
+
+func TestRenderSpeakerNotes(t *testing.T) {
+	steps := []transcript.Step{
+		{Title: "Step one", SpeakerNotes: "first note"},
+		{Title: "Step two", SpeakerNotes: "second note"},
+	}
+
+	rendered := renderSpeakerNotes(steps, 0)
+	want := "first note\n\n---\nNext: Step two\n"
+	if rendered != want {
+		t.Fatalf("unexpected notes output: %q", rendered)
+	}
+
+	rendered = renderSpeakerNotes(steps, 9)
+	if rendered != "second note\n" {
+		t.Fatalf("unexpected clamped notes output: %q", rendered)
 	}
 }

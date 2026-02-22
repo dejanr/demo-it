@@ -9,9 +9,11 @@ import (
 )
 
 type Action struct {
-	Kind string `yaml:"kind"`
-	Text string `yaml:"text,omitempty"`
-	Key  string `yaml:"key,omitempty"`
+	Kind      string `yaml:"kind"`
+	Text      string `yaml:"text,omitempty"`
+	Key       string `yaml:"key,omitempty"`
+	Direction string `yaml:"direction,omitempty"`
+	Path      string `yaml:"path,omitempty"`
 }
 
 type Step struct {
@@ -90,6 +92,26 @@ func decodeStep(raw string, line int) (Step, error) {
 		case "key":
 			if strings.TrimSpace(action.Key) == "" {
 				return Step{}, fmt.Errorf("demo-it block at line %d: key requires key", line)
+			}
+		case "split-pane":
+			direction := strings.TrimSpace(action.Direction)
+			if direction == "" {
+				action.Direction = "right"
+			} else {
+				switch direction {
+				case "right", "down":
+					action.Direction = direction
+				default:
+					return Step{}, fmt.Errorf("demo-it block at line %d: split-pane direction must be right|down", line)
+				}
+			}
+		case "split-pane-vertical":
+			action.Direction = "down"
+		case "clear-panes":
+			// no extra args
+		case "open-slide":
+			if strings.TrimSpace(action.Path) == "" {
+				return Step{}, fmt.Errorf("demo-it block at line %d: open-slide requires path", line)
 			}
 		default:
 			return Step{}, fmt.Errorf("demo-it block at line %d: unsupported action kind %q", line, action.Kind)

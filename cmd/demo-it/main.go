@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +49,8 @@ func run() error {
 		return listSessionsCommand()
 	case "kill":
 		return killSessionsCommand(flag.Args()[1:])
+	case "notes":
+		return notesCommand()
 	}
 
 	if !isProtocolCommand(target) {
@@ -67,7 +70,7 @@ func run() error {
 	}
 
 	c := client.SocketClient{SocketPath: *socketPath}
-	resp, err := c.Send(req)
+	resp, err := sendWithAutoStart(c, req, target, *runID, *socketPath)
 	if err != nil {
 		return err
 	}
@@ -79,6 +82,12 @@ func run() error {
 		return fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
 	}
 
+	if target == "next" || target == "prev" {
+		if err := advanceWorkspaceStepForCommand(target); err != nil {
+			return err
+		}
+	}
+
 	bytes, err := json.MarshalIndent(resp.State, "", "  ")
 	if err != nil {
 		return fmt.Errorf("format response: %w", err)
@@ -86,6 +95,39 @@ func run() error {
 	fmt.Println(string(bytes))
 
 	return nil
+}
+
+func sendWithAutoStart(c client.SocketClient, req protocol.Request, command string, runID string, socketPath string) (protocol.Response, error) {
+	resp, err := c.Send(req)
+	if err != nil {
+		return protocol.Response{}, err
+	}
+
+	if resp.OK || resp.Error == nil {
+		return resp, nil
+	}
+	if !shouldAutoStartOnRunNotFound(command) || resp.Error.Code != "run_not_found" {
+		return resp, nil
+	}
+
+	if err := ensureRunStarted(runID, socketPath); err != nil {
+		return protocol.Response{}, err
+	}
+
+	resp, err = c.Send(req)
+	if err != nil {
+		return protocol.Response{}, err
+	}
+	return resp, nil
+}
+
+func shouldAutoStartOnRunNotFound(command string) bool {
+	switch command {
+	case "next", "prev", "rerun", "jump", "focus", "reload":
+		return true
+	default:
+		return false
+	}
 }
 
 func bootstrapWorkspace(rawPath string, runID string, socketPath string) error {
@@ -119,7 +161,19 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string) error {
 		return err
 	}
 
-	if err := executeBootstrapStep(workspacePath, demoSession); err != nil {
+	steps, currentStep, err := executeBootstrapStep(workspacePath, demoSession)
+	if err != nil {
+		return err
+	}
+
+	if err := setSessionMetadata(demoSession, workspacePath, "demo", currentStep); err != nil {
+		return err
+	}
+	if err := setSessionMetadata(notesSession, workspacePath, "notes", currentStep); err != nil {
+		return err
+	}
+
+	if err := refreshNotesSession(notesSession, workspacePath, steps, currentStep); err != nil {
 		return err
 	}
 
@@ -157,19 +211,22 @@ func createSession(name string, cwd string) error {
 	return nil
 }
 
-func executeBootstrapStep(workspacePath string, demoSession string) error {
+func executeBootstrapStep(workspacePath string, demoSession string) ([]transcript.Step, int, error) {
 	stepsPath := filepath.Join(workspacePath, "demo-it.md")
 	steps, err := transcript.ParseStepsFile(stepsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return nil, -1, nil
 		}
-		return fmt.Errorf("parse %s: %w", stepsPath, err)
+		return nil, -1, fmt.Errorf("parse %s: %w", stepsPath, err)
 	}
 	if len(steps) == 0 {
-		return nil
+		return steps, -1, nil
 	}
-	return runActions(demoSession, steps[0].Actions)
+	if err := runActions(demoSession, steps[0].Actions); err != nil {
+		return nil, -1, err
+	}
+	return steps, 0, nil
 }
 
 func runActions(targetSession string, actions []transcript.Action) error {
@@ -182,6 +239,22 @@ func runActions(targetSession string, actions []transcript.Action) error {
 		case "key":
 			if err := runTmux("send-keys", "-t", targetSession, tmuxKey(action.Key)); err != nil {
 				return fmt.Errorf("key action: %w", err)
+			}
+		case "split-pane":
+			if err := splitPaneAction(targetSession, action.Direction); err != nil {
+				return err
+			}
+		case "split-pane-vertical":
+			if err := splitPaneAction(targetSession, "down"); err != nil {
+				return err
+			}
+		case "clear-panes":
+			if err := clearPanesAction(targetSession); err != nil {
+				return err
+			}
+		case "open-slide":
+			if err := openSlideAction(targetSession, action.Path); err != nil {
+				return err
 			}
 		default:
 			return fmt.Errorf("unsupported action kind: %s", action.Kind)
@@ -198,6 +271,109 @@ func tmuxKey(key string) string {
 	default:
 		return key
 	}
+}
+
+func splitPaneAction(targetSession string, direction string) error {
+	flag := "-h"
+	if strings.TrimSpace(direction) == "down" {
+		flag = "-v"
+	}
+	if err := runTmux("split-window", flag, "-t", targetSession); err != nil {
+		return fmt.Errorf("split-pane action: %w", err)
+	}
+	return nil
+}
+
+func clearPanesAction(targetSession string) error {
+	panes, err := listSessionPanes(targetSession)
+	if err != nil {
+		return err
+	}
+	if len(panes) == 0 {
+		return nil
+	}
+
+	keepPane := selectPaneToKeep(panes)
+	if len(panes) > 1 {
+		if err := runTmux("kill-pane", "-a", "-t", keepPane); err != nil {
+			return fmt.Errorf("clear-panes action (kill extra panes): %w", err)
+		}
+	}
+	if err := runTmux("clear-history", "-t", keepPane); err != nil {
+		return fmt.Errorf("clear-panes action (history): %w", err)
+	}
+	if err := runTmux("send-keys", "-R", "-t", keepPane); err != nil {
+		return fmt.Errorf("clear-panes action (reset): %w", err)
+	}
+	return nil
+}
+
+func openSlideAction(targetSession string, path string) error {
+	trimmedPath := strings.TrimSpace(path)
+	if trimmedPath == "" {
+		return errors.New("open-slide action requires path")
+	}
+	if err := runTmux("send-keys", "-t", targetSession, "Escape"); err != nil {
+		return fmt.Errorf("open-slide action (escape): %w", err)
+	}
+	if err := runTmux("send-keys", "-t", targetSession, formatOpenSlideCommand(trimmedPath)); err != nil {
+		return fmt.Errorf("open-slide action (command): %w", err)
+	}
+	if err := runTmux("send-keys", "-t", targetSession, "Enter"); err != nil {
+		return fmt.Errorf("open-slide action (enter): %w", err)
+	}
+	return nil
+}
+
+func formatOpenSlideCommand(path string) string {
+	escaped := strings.ReplaceAll(path, "'", "''")
+	return ":execute 'edit ' . fnameescape('" + escaped + "')"
+}
+
+type paneState struct {
+	ID    string
+	Index int
+}
+
+func listSessionPanes(targetSession string) ([]paneState, error) {
+	output, err := runTmuxOutput("list-panes", "-t", targetSession, "-F", "#{pane_index}\t#{pane_id}")
+	if err != nil {
+		return nil, fmt.Errorf("list panes for %q: %w", targetSession, err)
+	}
+	panes := make([]paneState, 0)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		parts := strings.SplitN(trimmed, "\t", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		idx, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil {
+			continue
+		}
+		paneID := strings.TrimSpace(parts[1])
+		if paneID == "" {
+			continue
+		}
+		panes = append(panes, paneState{ID: paneID, Index: idx})
+	}
+	return panes, nil
+}
+
+func selectPaneToKeep(panes []paneState) string {
+	if len(panes) == 0 {
+		return ""
+	}
+	keep := panes[0]
+	for _, pane := range panes[1:] {
+		if pane.Index < keep.Index {
+			keep = pane
+		}
+	}
+	return keep.ID
 }
 
 func ensureRunStarted(runID string, socketPath string) error {
@@ -221,71 +397,376 @@ func ensureRunStarted(runID string, socketPath string) error {
 	return nil
 }
 
-func listSessionsCommand() error {
-	sessions, err := listDemoItSessions()
+type managedSession struct {
+	Name         string
+	Role         string
+	Workspace    string
+	Step         int
+	LastAttached int64
+}
+
+type managedWorkspace struct {
+	Display      string
+	Workspace    string
+	DemoSession  string
+	NotesSession string
+	SessionNames []string
+	LastAttached int64
+}
+
+func setSessionMetadata(name string, workspace string, role string, step int) error {
+	if err := runTmux("set-option", "-t", name, "-q", "@demo_it", "1"); err != nil {
+		return fmt.Errorf("mark tmux session %q: %w", name, err)
+	}
+	if err := runTmux("set-option", "-t", name, "-q", "@demo_it_workspace", workspace); err != nil {
+		return fmt.Errorf("set workspace metadata for %q: %w", name, err)
+	}
+	if err := runTmux("set-option", "-t", name, "-q", "@demo_it_role", role); err != nil {
+		return fmt.Errorf("set role metadata for %q: %w", name, err)
+	}
+	if err := runTmux("set-option", "-t", name, "-q", "@demo_it_step", strconv.Itoa(step)); err != nil {
+		return fmt.Errorf("set step metadata for %q: %w", name, err)
+	}
+	return nil
+}
+
+func refreshNotesSession(notesSession string, workspacePath string, steps []transcript.Step, stepIndex int) error {
+	notesPath := filepath.Join(workspacePath, ".demo-it", "notes.md")
+	if err := os.MkdirAll(filepath.Dir(notesPath), 0o755); err != nil {
+		return fmt.Errorf("create notes directory: %w", err)
+	}
+	if err := os.WriteFile(notesPath, []byte(renderSpeakerNotes(steps, stepIndex)), 0o644); err != nil {
+		return fmt.Errorf("write notes file: %w", err)
+	}
+	if err := runTmux("respawn-pane", "-k", "-t", notesSession, "-c", workspacePath, "nvim", notesPath); err != nil {
+		return fmt.Errorf("refresh notes session %q: %w", notesSession, err)
+	}
+	return nil
+}
+
+func renderSpeakerNotes(steps []transcript.Step, stepIndex int) string {
+	if len(steps) == 0 {
+		return "No demo-it blocks found in demo-it.md.\n"
+	}
+
+	if stepIndex < 0 {
+		stepIndex = 0
+	}
+	if stepIndex >= len(steps) {
+		stepIndex = len(steps) - 1
+	}
+
+	notes := strings.TrimSpace(steps[stepIndex].SpeakerNotes)
+	if notes == "" {
+		notes = "No speaker notes for this step."
+	}
+
+	if stepIndex+1 < len(steps) {
+		return notes + "\n\n---\nNext: " + steps[stepIndex+1].Title + "\n"
+	}
+	return notes + "\n"
+}
+
+func advanceWorkspaceStepForCommand(command string) error {
+	sessions, err := listManagedSessionDetails()
 	if err != nil {
 		return err
 	}
-	if len(sessions) == 0 {
+
+	demoSession, notesSession, ok := selectWorkspaceSessions(sessions)
+	if !ok {
+		return nil
+	}
+
+	stepsPath := filepath.Join(demoSession.Workspace, "demo-it.md")
+	steps, err := transcript.ParseStepsFile(stepsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("parse %s: %w", stepsPath, err)
+	}
+	if len(steps) == 0 {
+		return nil
+	}
+
+	nextStep, shouldExecuteActions := resolveStepTransition(demoSession.Step, len(steps), command)
+	if nextStep == demoSession.Step {
+		return nil
+	}
+
+	if shouldExecuteActions {
+		if err := runActions(demoSession.Name, steps[nextStep].Actions); err != nil {
+			return err
+		}
+	}
+	if err := setSessionMetadata(demoSession.Name, demoSession.Workspace, "demo", nextStep); err != nil {
+		return err
+	}
+	if notesSession != nil {
+		if err := setSessionMetadata(notesSession.Name, demoSession.Workspace, "notes", nextStep); err != nil {
+			return err
+		}
+		if err := refreshNotesSession(notesSession.Name, demoSession.Workspace, steps, nextStep); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func resolveStepTransition(currentStep int, totalSteps int, command string) (int, bool) {
+	if totalSteps == 0 {
+		return currentStep, false
+	}
+	if currentStep < 0 {
+		currentStep = 0
+	}
+	if currentStep >= totalSteps {
+		currentStep = totalSteps - 1
+	}
+
+	switch command {
+	case "next":
+		next := currentStep + 1
+		if next >= totalSteps {
+			return currentStep, false
+		}
+		return next, true
+	case "prev":
+		prev := currentStep - 1
+		if prev < 0 {
+			return currentStep, false
+		}
+		return prev, false
+	default:
+		return currentStep, false
+	}
+}
+
+func selectWorkspaceSessions(sessions []managedSession) (managedSession, *managedSession, bool) {
+	workspaces := groupManagedWorkspaces(sessions)
+	if len(workspaces) == 0 {
+		return managedSession{}, nil, false
+	}
+	workspace := workspaces[0]
+	if workspace.DemoSession == "" {
+		return managedSession{}, nil, false
+	}
+
+	var demo managedSession
+	foundDemo := false
+	var notes *managedSession
+	for _, session := range sessions {
+		if session.Name == workspace.DemoSession {
+			demo = session
+			foundDemo = true
+		}
+		if workspace.NotesSession != "" && session.Name == workspace.NotesSession {
+			s := session
+			notes = &s
+		}
+	}
+	if !foundDemo {
+		return managedSession{}, nil, false
+	}
+	return demo, notes, true
+}
+
+func listSessionsCommand() error {
+	workspaces, err := listManagedWorkspaces()
+	if err != nil {
+		return err
+	}
+	if len(workspaces) == 0 {
 		fmt.Println("no demo-it tmux sessions")
 		return nil
 	}
-	for idx, session := range sessions {
-		fmt.Printf("%d\t%s\n", idx+1, session)
+	for idx, workspace := range workspaces {
+		fmt.Printf("%d\t%s\n", idx+1, workspace.Display)
 	}
 	return nil
+}
+
+func notesCommand() error {
+	workspaces, err := listManagedWorkspaces()
+	if err != nil {
+		return err
+	}
+	if len(workspaces) == 0 {
+		return errors.New("no demo-it tmux sessions")
+	}
+
+	var notesSession string
+	for _, workspace := range workspaces {
+		if workspace.NotesSession != "" {
+			notesSession = workspace.NotesSession
+			break
+		}
+	}
+	if notesSession == "" {
+		return errors.New("no demo-it notes session found")
+	}
+
+	if os.Getenv("TMUX") != "" {
+		return runTmuxWithStdio("switch-client", "-t", notesSession)
+	}
+	return runTmuxWithStdio("attach-session", "-t", notesSession)
 }
 
 func killSessionsCommand(rawArgs []string) error {
-	sessions, err := listDemoItSessions()
+	workspaces, err := listManagedWorkspaces()
 	if err != nil {
 		return err
 	}
-	if len(sessions) == 0 {
+	if len(workspaces) == 0 {
 		fmt.Println("no demo-it tmux sessions")
 		return nil
 	}
 
-	selected, err := selectSessionsToKill(sessions, rawArgs)
+	selected, err := selectWorkspacesToKill(workspaces, rawArgs)
 	if err != nil {
 		return err
 	}
 
-	for _, session := range selected {
-		if err := runTmux("kill-session", "-t", session); err != nil {
-			return fmt.Errorf("kill tmux session %q: %w", session, err)
+	killedCount := 0
+	seen := map[string]struct{}{}
+	for _, workspace := range selected {
+		for _, session := range workspace.SessionNames {
+			if _, ok := seen[session]; ok {
+				continue
+			}
+			seen[session] = struct{}{}
+			if err := runTmux("kill-session", "-t", session); err != nil {
+				return fmt.Errorf("kill tmux session %q: %w", session, err)
+			}
+			killedCount++
 		}
 	}
-	fmt.Printf("killed %d demo-it tmux session(s)\n", len(selected))
+	fmt.Printf("killed %d demo-it tmux session(s)\n", killedCount)
 	return nil
 }
 
-func selectSessionsToKill(sessions []string, rawArgs []string) ([]string, error) {
+func selectWorkspacesToKill(workspaces []managedWorkspace, rawArgs []string) ([]managedWorkspace, error) {
 	if len(rawArgs) == 0 {
-		return sessions, nil
+		return workspaces, nil
 	}
 
-	selected := make([]string, 0, len(rawArgs))
+	selected := make([]managedWorkspace, 0, len(rawArgs))
 	seen := map[int]struct{}{}
 	for _, arg := range rawArgs {
 		idx, err := strconv.Atoi(arg)
 		if err != nil {
 			return nil, fmt.Errorf("kill expects numeric session indexes from 'demo-it list', got %q", arg)
 		}
-		if idx < 1 || idx > len(sessions) {
-			return nil, fmt.Errorf("kill index out of range: %d (valid: 1..%d)", idx, len(sessions))
+		if idx < 1 || idx > len(workspaces) {
+			return nil, fmt.Errorf("kill index out of range: %d (valid: 1..%d)", idx, len(workspaces))
 		}
 		if _, ok := seen[idx]; ok {
 			continue
 		}
 		seen[idx] = struct{}{}
-		selected = append(selected, sessions[idx-1])
+		selected = append(selected, workspaces[idx-1])
 	}
 	return selected, nil
 }
 
-func listDemoItSessions() ([]string, error) {
-	output, err := runTmuxOutput("list-sessions", "-F", "#{session_name}\t#{@demo_it}")
+func listManagedWorkspaces() ([]managedWorkspace, error) {
+	sessions, err := listManagedSessionDetails()
+	if err != nil {
+		return nil, err
+	}
+	return groupManagedWorkspaces(sessions), nil
+}
+
+func groupManagedWorkspaces(sessions []managedSession) []managedWorkspace {
+	groups := map[string]*managedWorkspace{}
+	for _, session := range sessions {
+		key := workspaceKey(session)
+		group, ok := groups[key]
+		if !ok {
+			group = &managedWorkspace{
+				Workspace: key,
+			}
+			groups[key] = group
+		}
+
+		if group.Workspace == "" && session.Workspace != "" {
+			group.Workspace = session.Workspace
+		}
+		if session.LastAttached > group.LastAttached {
+			group.LastAttached = session.LastAttached
+		}
+
+		if session.Role == "demo" {
+			group.DemoSession = session.Name
+		}
+		if session.Role == "notes" {
+			group.NotesSession = session.Name
+		}
+
+		exists := false
+		for _, name := range group.SessionNames {
+			if name == session.Name {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			group.SessionNames = append(group.SessionNames, session.Name)
+		}
+	}
+
+	workspaces := make([]managedWorkspace, 0, len(groups))
+	for _, group := range groups {
+		if group.DemoSession == "" {
+			for _, name := range group.SessionNames {
+				if strings.HasSuffix(name, "-demo") {
+					group.DemoSession = name
+					break
+				}
+			}
+		}
+		if group.NotesSession == "" {
+			for _, name := range group.SessionNames {
+				if strings.HasSuffix(name, "-notes") {
+					group.NotesSession = name
+					break
+				}
+			}
+		}
+		if group.DemoSession != "" {
+			group.Display = group.DemoSession
+		} else if len(group.SessionNames) > 0 {
+			group.Display = group.SessionNames[0]
+		}
+		workspaces = append(workspaces, *group)
+	}
+
+	sort.Slice(workspaces, func(i, j int) bool {
+		if workspaces[i].LastAttached == workspaces[j].LastAttached {
+			return workspaces[i].Display < workspaces[j].Display
+		}
+		return workspaces[i].LastAttached > workspaces[j].LastAttached
+	})
+
+	return workspaces
+}
+
+func workspaceKey(session managedSession) string {
+	if session.Workspace != "" {
+		return session.Workspace
+	}
+	if strings.HasSuffix(session.Name, "-demo") {
+		return strings.TrimSuffix(session.Name, "-demo")
+	}
+	if strings.HasSuffix(session.Name, "-notes") {
+		return strings.TrimSuffix(session.Name, "-notes")
+	}
+	return session.Name
+}
+
+func listManagedSessionDetails() ([]managedSession, error) {
+	output, err := runTmuxOutput("list-sessions", "-F", "#{session_name}\t#{@demo_it}\t#{@demo_it_role}\t#{@demo_it_workspace}\t#{@demo_it_step}\t#{session_last_attached}")
 	if err != nil {
 		if isTmuxNoServerError(err) {
 			return nil, nil
@@ -293,28 +774,61 @@ func listDemoItSessions() ([]string, error) {
 		return nil, fmt.Errorf("list tmux sessions: %w", err)
 	}
 
-	sessions := make([]string, 0)
+	sessions := make([]managedSession, 0)
 	seen := map[string]struct{}{}
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
 
-		parts := strings.SplitN(line, "\t", 2)
-		name := parts[0]
+		parts := strings.SplitN(line, "\t", 6)
+		name := strings.TrimSpace(parts[0])
 		marker := ""
+		role := ""
+		workspace := ""
+		step := -1
+		lastAttached := int64(0)
 		if len(parts) > 1 {
 			marker = strings.TrimSpace(parts[1])
+		}
+		if len(parts) > 2 {
+			role = strings.TrimSpace(parts[2])
+		}
+		if len(parts) > 3 {
+			workspace = strings.TrimSpace(parts[3])
+		}
+		if len(parts) > 4 {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(parts[4])); err == nil {
+				step = parsed
+			}
+		}
+		if len(parts) > 5 {
+			if parsed, err := strconv.ParseInt(strings.TrimSpace(parts[5]), 10, 64); err == nil {
+				lastAttached = parsed
+			}
 		}
 
 		if marker != "1" && !isLegacyDemoSession(name) {
 			continue
 		}
+		if role == "" {
+			if strings.HasSuffix(name, "-notes") {
+				role = "notes"
+			} else {
+				role = "demo"
+			}
+		}
 		if _, ok := seen[name]; ok {
 			continue
 		}
 		seen[name] = struct{}{}
-		sessions = append(sessions, name)
+		sessions = append(sessions, managedSession{
+			Name:         name,
+			Role:         role,
+			Workspace:    workspace,
+			Step:         step,
+			LastAttached: lastAttached,
+		})
 	}
 
 	return sessions, nil
@@ -487,6 +1001,7 @@ Commands:
   jump --slide <id|index> [--focus <present|return|none>]
   focus --policy <present|return|none>
   list
+  notes
   kill [session-index ...]
 
 Workspace mode:
@@ -494,7 +1009,8 @@ Workspace mode:
   then opens/switches to <name>-demo.
 
 Session lifecycle:
-  demo-it list               # show numbered managed sessions
+  demo-it list               # show numbered managed workspaces (demo session)
+  demo-it notes              # open notes session for latest workspace
   demo-it kill               # kill all managed sessions
-  demo-it kill 1 3           # kill selected session indexes from list
+  demo-it kill 1 3           # kill selected workspace indexes from list
 `
