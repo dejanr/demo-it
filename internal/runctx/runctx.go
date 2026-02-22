@@ -19,17 +19,23 @@ func RepoRoot() (string, error) {
 }
 
 func DefaultRunID(repoRoot string) string {
-	base := filepath.Base(repoRoot)
-	slug := strings.ToLower(base)
-	slug = nonSlugChars.ReplaceAllString(slug, "-")
-	slug = strings.Trim(slug, "-")
-	if slug == "" {
-		slug = "run"
-	}
+	slug := slugFromPath(repoRoot, "run")
 	if slug == "demo-it" || strings.HasPrefix(slug, "demo-it-") {
 		return slug
 	}
 	return "demo-it-" + slug
+}
+
+func SessionPrefix(workspacePath string) string {
+	return slugFromPath(workspacePath, "demo")
+}
+
+func DemoSessionName(workspacePath string) string {
+	return SessionPrefix(workspacePath) + "-demo"
+}
+
+func NotesSessionName(workspacePath string) string {
+	return SessionPrefix(workspacePath) + "-notes"
 }
 
 func DefaultSocketPath(repoRoot string) string {
@@ -43,4 +49,15 @@ func DefaultSocketPath(repoRoot string) string {
 	}
 
 	return filepath.Join(runtimeDir, "demo-it", DefaultRunID(repoRoot)+".sock")
+}
+
+func slugFromPath(path string, fallback string) string {
+	base := filepath.Base(path)
+	slug := strings.ToLower(base)
+	slug = nonSlugChars.ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+	if slug == "" || slug == "." {
+		slug = fallback
+	}
+	return slug
 }

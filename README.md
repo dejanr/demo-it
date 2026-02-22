@@ -37,6 +37,27 @@ M2 foundation in place:
 - shared formatting config: `treefmt.toml` (used by both `nix fmt` and `fmt`)
 - `devenv up` runs `demo-itd` with auto-reload via `.air.toml`
 
+## Quick tmux workspace bootstrap
+
+Use path mode to reset/create deterministic tmux sessions for a workspace:
+
+```bash
+demo-it ./examples/demo
+```
+
+For `examples/demo`, this creates:
+- `demo-demo`
+- `demo-notes`
+
+It opens/switches to `demo-demo`; open `demo-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately.
+
+Session utilities:
+- `demo-it list` lists managed demo-it tmux sessions with numeric indexes
+- `demo-it kill` kills all managed demo-it tmux sessions
+- `demo-it kill <index ...>` kills selected sessions by index from `demo-it list`
+
+If `demo-it.md` contains `demo-it` fenced blocks, bootstrap replays the first block `actions` into `demo-demo` (for example: `insert-text` + `key` to open Neovim). `speaker_notes` are intended as post-action guidance before moving to the next block. `key` actions can express tmux chord sequences as separate actions (for example `C-s` then `v`, depending on your tmux bindings).
+
 ## Neovim plugin (local development)
 
 The repository now includes a local plugin runtime:
