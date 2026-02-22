@@ -15,7 +15,22 @@ func RepoRoot() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get working directory: %w", err)
 	}
-	return cwd, nil
+	return findRepoRoot(cwd), nil
+}
+
+func findRepoRoot(start string) string {
+	current := start
+	for {
+		gitPath := filepath.Join(current, ".git")
+		if _, err := os.Stat(gitPath); err == nil {
+			return current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return start
+		}
+		current = parent
+	}
 }
 
 func DefaultRunID(repoRoot string) string {

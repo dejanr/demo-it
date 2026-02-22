@@ -16,16 +16,14 @@ type Service struct {
 }
 
 type StateView struct {
-	RunID              string               `json:"run_id"`
-	Status             session.RunStatus    `json:"status"`
-	CurrentSlide       int                  `json:"current_slide"`
-	CurrentInteraction int                  `json:"current_interaction"`
-	DefaultFocus       protocol.FocusPolicy `json:"default_focus"`
-	TranscriptRevision string               `json:"transcript_revision,omitempty"`
-	LastEvent          string               `json:"last_event,omitempty"`
-	InteractionID      string               `json:"interaction_id,omitempty"`
-	Skipped            bool                 `json:"skipped,omitempty"`
-	Completed          bool                 `json:"completed,omitempty"`
+	RunID              string            `json:"run_id"`
+	Status             session.RunStatus `json:"status"`
+	CurrentSlide       int               `json:"current_slide"`
+	TranscriptRevision string            `json:"transcript_revision,omitempty"`
+	LastEvent          string            `json:"last_event,omitempty"`
+	InteractionID      string            `json:"interaction_id,omitempty"`
+	Skipped            bool              `json:"skipped,omitempty"`
+	Completed          bool              `json:"completed,omitempty"`
 }
 
 func NewService() *Service {
@@ -65,12 +63,7 @@ func (s *Service) Handle(req protocol.Request) protocol.Response {
 			return notFoundResponse(req.ID, req.RunID)
 		}
 
-		var args protocol.NextArgs
-		if err := decodeArgs(req.Args, &args); err != nil {
-			return errorResponse(req.ID, fmt.Errorf("%w: %v", protocol.ErrInvalidRequest, err))
-		}
-
-		result, err := run.Next(args.Force)
+		result, err := run.Next()
 		if err != nil && !errors.Is(err, session.ErrNoFurtherTransition) {
 			return errorResponse(req.ID, err)
 		}
@@ -182,8 +175,6 @@ func stateView(run session.RunState, transition session.TransitionResult) StateV
 		RunID:              run.RunID,
 		Status:             run.Status,
 		CurrentSlide:       run.Cursor.Slide,
-		CurrentInteraction: run.Cursor.Interaction,
-		DefaultFocus:       run.DefaultFocusPolicy,
 		TranscriptRevision: run.TranscriptRevision,
 		LastEvent:          transition.Event,
 		InteractionID:      transition.InteractionID,

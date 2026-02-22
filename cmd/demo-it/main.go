@@ -51,10 +51,25 @@ func run() error {
 		return killSessionsCommand(flag.Args()[1:])
 	case "notes":
 		return notesCommand()
+	case "start":
+		workspacePath := ""
+		switch flag.NArg() {
+		case 1:
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("resolve current working directory: %w", err)
+			}
+			workspacePath = cwd
+		case 2:
+			workspacePath = flag.Arg(1)
+		default:
+			return fmt.Errorf("start accepts at most one workspace path\n%s", usage)
+		}
+		return bootstrapWorkspace(workspacePath, *runID, *socketPath, true)
 	}
 
 	if !isProtocolCommand(target) {
-		return bootstrapWorkspace(target, *runID, *socketPath)
+		return bootstrapWorkspace(target, *runID, *socketPath, false)
 	}
 
 	cmd, args, err := parseSubcommand(target, flag.Args()[1:])
@@ -140,7 +155,7 @@ func shouldAutoStartOnRunNotFound(command string) bool {
 	}
 }
 
-func bootstrapWorkspace(rawPath string, runID string, socketPath string) error {
+func bootstrapWorkspace(rawPath string, runID string, socketPath string, requireTranscript bool) error {
 	workspacePath, err := filepath.Abs(rawPath)
 	if err != nil {
 		return fmt.Errorf("resolve workspace path: %w", err)
@@ -171,7 +186,7 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string) error {
 		return err
 	}
 
-	steps, currentStep, err := executeBootstrapStep(workspacePath, demoSession)
+	steps, currentStep, err := executeBootstrapStep(workspacePath, demoSession, requireTranscript)
 	if err != nil {
 		return err
 	}
@@ -221,11 +236,14 @@ func createSession(name string, cwd string) error {
 	return nil
 }
 
-func executeBootstrapStep(workspacePath string, demoSession string) ([]transcript.Step, int, error) {
+func executeBootstrapStep(workspacePath string, demoSession string, requireTranscript bool) ([]transcript.Step, int, error) {
 	stepsPath := filepath.Join(workspacePath, "demo-it.md")
 	steps, err := transcript.ParseStepsFile(stepsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			if requireTranscript {
+				return nil, -1, fmt.Errorf("missing transcript: %s", stepsPath)
+			}
 			return nil, -1, nil
 		}
 		return nil, -1, fmt.Errorf("parse %s: %w", stepsPath, err)
@@ -1168,14 +1186,14 @@ func parseNextArgs(rawArgs []string, command protocol.Command) (protocol.Command
 	fs := flag.NewFlagSet(string(command), flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	focus := fs.String("focus", "", "focus policy: present|return|none")
-	force := fs.Bool("force", false, "force execution")
 	if err := fs.Parse(rawArgs); err != nil {
 		return "", nil, err
 	}
+	if fs.NArg() > 0 {
+		return "", nil, fmt.Errorf("%s does not accept positional arguments", command)
+	}
 
-	args := protocol.NextArgs{Focus: protocol.FocusPolicy(*focus), Force: *force}
-	encoded, err := json.Marshal(args)
+	encoded, err := json.Marshal(protocol.NextArgs{})
 	if err != nil {
 		return "", nil, fmt.Errorf("encode args: %w", err)
 	}
@@ -1187,7 +1205,6 @@ func parseJumpArgs(rawArgs []string) (protocol.Command, json.RawMessage, error) 
 	fs.SetOutput(os.Stderr)
 
 	slide := fs.String("slide", "", "slide id or zero-based slide index")
-	focus := fs.String("focus", "", "focus policy: present|return|none")
 	if err := fs.Parse(rawArgs); err != nil {
 		return "", nil, err
 	}
@@ -1196,7 +1213,7 @@ func parseJumpArgs(rawArgs []string) (protocol.Command, json.RawMessage, error) 
 		return "", nil, fmt.Errorf("jump requires --slide <id|index>")
 	}
 
-	args := protocol.JumpArgs{Focus: protocol.FocusPolicy(*focus)}
+	args := protocol.JumpArgs{}
 	if idx, err := strconv.Atoi(*slide); err == nil {
 		args.SlideIndex = &idx
 	} else {
@@ -1241,21 +1258,25 @@ const usage = `Usage:
   demo-it <workspace-path>
 
 Commands:
-  start
+  start [workspace-path]
   status
   reload
-  next [--focus <present|return|none>] [--force]
+  next
   prev
-  rerun [--focus <present|return|none>] [--force]
-  jump --slide <id|index> [--focus <present|return|none>]
+  rerun
+  jump --slide <id|index>
   focus --policy <present|return|none>
   list
   notes
   kill [session-index ...]
 
+Start behavior:
+  start (without a path) bootstraps the current working directory.
+  start <workspace-path> bootstraps that workspace.
+  start requires <workspace>/demo-it.md.
+
 Workspace mode:
-  Resets and starts <name>-demo and <name>-notes tmux sessions for the path,
-  then opens/switches to <name>-demo.
+  Passing a workspace path directly is equivalent to start <workspace-path>.
 
 Session lifecycle:
   demo-it list               # show numbered managed workspaces (demo session)

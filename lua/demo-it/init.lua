@@ -83,6 +83,12 @@ local function format_transition_output(command, output)
 			stepDetail = stepDetail .. " skipped"
 		end
 		table.insert(details, stepDetail)
+	elseif state.interaction_id and state.interaction_id ~= "" then
+		local interactionDetail = ("interaction %s"):format(state.interaction_id)
+		if state.skipped then
+			interactionDetail = interactionDetail .. " skipped"
+		end
+		table.insert(details, interactionDetail)
 	else
 		table.insert(details, "step -")
 	end
@@ -135,6 +141,16 @@ local function set_command(name, opts)
 	})
 end
 
+local function current_working_directory()
+	if vim.uv and vim.uv.cwd then
+		return vim.uv.cwd()
+	end
+	if vim.loop and vim.loop.cwd then
+		return vim.loop.cwd()
+	end
+	return nil
+end
+
 function M.setup(opts)
 	M.config = vim.tbl_deep_extend("force", M.config, opts or {})
 
@@ -146,8 +162,17 @@ function M.setup(opts)
 	})
 
 	set_command("DemoItStart", {
-		fn = function()
-			M.exec({ "start" })
+		nargs = "?",
+		fn = function(ctx)
+			local workspace = vim.trim(ctx.args or "")
+			if workspace == "" then
+				workspace = current_working_directory() or ""
+			end
+			if workspace == "" then
+				vim.notify("could not determine current working directory", vim.log.levels.ERROR, { title = "demo-it" })
+				return
+			end
+			M.exec({ "start", workspace })
 		end,
 	})
 	set_command("DemoItStatus", {

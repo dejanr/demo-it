@@ -5,12 +5,26 @@ import (
 	"testing"
 )
 
-func TestRequestValidateAcceptsNextWithFocus(t *testing.T) {
-	raw, err := json.Marshal(NextArgs{Focus: FocusPresent})
+func TestRequestValidateAcceptsNextWithoutArgs(t *testing.T) {
+	raw, err := json.Marshal(NextArgs{})
 	if err != nil {
 		t.Fatalf("marshal args: %v", err)
 	}
 
+	req := Request{
+		ID:      "req-1",
+		Command: CommandNext,
+		RunID:   "demo-it-test",
+		Args:    raw,
+	}
+
+	if err := req.Validate(); err != nil {
+		t.Fatalf("expected valid request, got %v", err)
+	}
+}
+
+func TestRequestValidateIgnoresUnknownNextArgs(t *testing.T) {
+	raw := json.RawMessage(`{"focus":"present","force":true}`)
 	req := Request{
 		ID:      "req-1",
 		Command: CommandNext,
@@ -32,24 +46,6 @@ func TestRequestValidateRejectsUnsupportedCommand(t *testing.T) {
 
 	if err := req.Validate(); err == nil {
 		t.Fatal("expected validation error for unsupported command")
-	}
-}
-
-func TestRequestValidateRejectsInvalidFocus(t *testing.T) {
-	raw, err := json.Marshal(NextArgs{Focus: FocusPolicy("teleport")})
-	if err != nil {
-		t.Fatalf("marshal args: %v", err)
-	}
-
-	req := Request{
-		ID:      "req-1",
-		Command: CommandNext,
-		RunID:   "demo-it-test",
-		Args:    raw,
-	}
-
-	if err := req.Validate(); err == nil {
-		t.Fatal("expected validation error for invalid focus policy")
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/dejanr/demo-it/internal/transcript"
@@ -281,6 +282,31 @@ func TestResolveStepTransition(t *testing.T) {
 	stays, execute := resolveStepTransition(0, 3, "prev")
 	if stays != 0 || execute {
 		t.Fatalf("prev-at-start transition = (%d,%v), want (0,false)", stays, execute)
+	}
+}
+
+func TestExecuteBootstrapStepRequiresTranscriptWhenRequested(t *testing.T) {
+	workspace := t.TempDir()
+	_, _, err := executeBootstrapStep(workspace, "demo-session", true)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "missing transcript") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestExecuteBootstrapStepAllowsMissingTranscriptWhenOptional(t *testing.T) {
+	workspace := t.TempDir()
+	steps, step, err := executeBootstrapStep(workspace, "demo-session", false)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if steps != nil {
+		t.Fatalf("expected nil steps, got %#v", steps)
+	}
+	if step != -1 {
+		t.Fatalf("expected step -1, got %d", step)
 	}
 }
 

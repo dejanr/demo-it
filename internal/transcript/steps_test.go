@@ -197,6 +197,32 @@ actions:
 	}
 }
 
+func TestParseStepsMarkdownRejectsDuplicateTitles(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: repeat
+actions:
+  - kind: key
+    key: return
+` + "```" + `
+
+` + "```demo-it" + `
+title: repeat
+actions:
+  - kind: key
+    key: return
+` + "```" + `
+`
+
+	_, err := ParseStepsMarkdown(markdown)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "duplicate title") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseStepsMarkdownRequiresActionsOrSlide(t *testing.T) {
 	markdown := `
 ` + "```demo-it" + `

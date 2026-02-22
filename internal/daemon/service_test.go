@@ -24,8 +24,8 @@ func TestHandleStartCreatesRunAndStatusReturnsState(t *testing.T) {
 	if state.RunID != "demo-it-test" {
 		t.Fatalf("unexpected run id: %s", state.RunID)
 	}
-	if state.CurrentSlide != 0 || state.CurrentInteraction != -1 {
-		t.Fatalf("unexpected cursor: %d/%d", state.CurrentSlide, state.CurrentInteraction)
+	if state.CurrentSlide != 0 {
+		t.Fatalf("unexpected slide index: %d", state.CurrentSlide)
 	}
 }
 
@@ -42,8 +42,8 @@ func TestHandleNextAdvancesInteraction(t *testing.T) {
 	if state.LastEvent != "interaction" {
 		t.Fatalf("expected interaction event, got %s", state.LastEvent)
 	}
-	if state.CurrentInteraction != 0 {
-		t.Fatalf("expected interaction index 0, got %d", state.CurrentInteraction)
+	if state.CurrentSlide != 0 {
+		t.Fatalf("expected slide index 0, got %d", state.CurrentSlide)
 	}
 }
 
@@ -82,8 +82,8 @@ func TestHandleFocusPolicy(t *testing.T) {
 	}
 
 	state := decodeState(t, resp.State)
-	if state.DefaultFocus != protocol.FocusReturn {
-		t.Fatalf("expected focus return, got %s", state.DefaultFocus)
+	if state.LastEvent != "set_focus_policy" {
+		t.Fatalf("expected set_focus_policy event, got %s", state.LastEvent)
 	}
 }
 

@@ -38,6 +38,7 @@ func ParseStepsMarkdown(markdown string) ([]Step, error) {
 	blockStart := 0
 	var blockLines []string
 	steps := make([]Step, 0)
+	titles := make(map[string]struct{})
 
 	for idx, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -55,6 +56,11 @@ func ParseStepsMarkdown(markdown string) ([]Step, error) {
 			if err != nil {
 				return nil, err
 			}
+			title := strings.TrimSpace(step.Title)
+			if _, exists := titles[title]; exists {
+				return nil, fmt.Errorf("demo-it block at line %d: duplicate title %q", blockStart, title)
+			}
+			titles[title] = struct{}{}
 			steps = append(steps, step)
 			insideBlock = false
 			continue

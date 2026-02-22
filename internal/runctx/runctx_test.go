@@ -1,9 +1,32 @@
 package runctx
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestFindRepoRootReturnsNearestGitAncestor(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("create .git: %v", err)
+	}
+	nested := filepath.Join(repo, "examples", "tmux-splits")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("create nested: %v", err)
+	}
+
+	if got := findRepoRoot(nested); got != repo {
+		t.Fatalf("findRepoRoot(%q) = %q, want %q", nested, got, repo)
+	}
+}
+
+func TestFindRepoRootFallsBackToStartWhenNoGitAncestor(t *testing.T) {
+	start := t.TempDir()
+	if got := findRepoRoot(start); got != start {
+		t.Fatalf("findRepoRoot(%q) = %q, want %q", start, got, start)
+	}
+}
 
 func TestDefaultRunID(t *testing.T) {
 	tests := []struct {

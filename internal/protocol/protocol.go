@@ -28,11 +28,10 @@ const (
 )
 
 type Request struct {
-	ID       string          `json:"id"`
-	Command  Command         `json:"cmd"`
-	RunID    string          `json:"run_id"`
-	ClientID string          `json:"client_id,omitempty"`
-	Args     json.RawMessage `json:"args,omitempty"`
+	ID      string          `json:"id"`
+	Command Command         `json:"cmd"`
+	RunID   string          `json:"run_id"`
+	Args    json.RawMessage `json:"args,omitempty"`
 }
 
 type Response struct {
@@ -47,15 +46,11 @@ type APIError struct {
 	Message string `json:"message"`
 }
 
-type NextArgs struct {
-	Focus FocusPolicy `json:"focus,omitempty"`
-	Force bool        `json:"force,omitempty"`
-}
+type NextArgs struct{}
 
 type JumpArgs struct {
-	SlideID    string      `json:"slide_id,omitempty"`
-	SlideIndex *int        `json:"slide_index,omitempty"`
-	Focus      FocusPolicy `json:"focus,omitempty"`
+	SlideID    string `json:"slide_id,omitempty"`
+	SlideIndex *int   `json:"slide_index,omitempty"`
 }
 
 type SetFocusPolicyArgs struct {
@@ -83,9 +78,6 @@ func (r Request) Validate() error {
 		if err := decodeArgs(r.Args, &args); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 		}
-		if args.Focus != "" && !args.Focus.Valid() {
-			return fmt.Errorf("%w: invalid focus policy %q", ErrInvalidRequest, args.Focus)
-		}
 		return nil
 	case CommandJump:
 		var args JumpArgs
@@ -94,9 +86,6 @@ func (r Request) Validate() error {
 		}
 		if args.SlideID == "" && args.SlideIndex == nil {
 			return fmt.Errorf("%w: jump requires slide_id or slide_index", ErrInvalidRequest)
-		}
-		if args.Focus != "" && !args.Focus.Valid() {
-			return fmt.Errorf("%w: invalid focus policy %q", ErrInvalidRequest, args.Focus)
 		}
 		return nil
 	case CommandSetFocusPolicy:

@@ -8,7 +8,7 @@ import (
 func TestNextExecutesInteractionAndUpdatesCursor(t *testing.T) {
 	state := NewRunState("run-1", demoSlides(), "rev-1")
 
-	result, err := state.Next(false)
+	result, err := state.Next()
 	if err != nil {
 		t.Fatalf("next failed: %v", err)
 	}
@@ -32,14 +32,14 @@ func TestNextExecutesInteractionAndUpdatesCursor(t *testing.T) {
 func TestNextMovesToNextSlideWhenCurrentSlideExhausted(t *testing.T) {
 	state := NewRunState("run-1", demoSlides(), "rev-1")
 
-	if _, err := state.Next(false); err != nil {
+	if _, err := state.Next(); err != nil {
 		t.Fatalf("next failed: %v", err)
 	}
-	if _, err := state.Next(false); err != nil {
+	if _, err := state.Next(); err != nil {
 		t.Fatalf("next failed: %v", err)
 	}
 
-	result, err := state.Next(false)
+	result, err := state.Next()
 	if err != nil {
 		t.Fatalf("expected slide transition, got error: %v", err)
 	}
@@ -53,10 +53,10 @@ func TestNextMovesToNextSlideWhenCurrentSlideExhausted(t *testing.T) {
 
 func TestPrevRestoresPreviousCursor(t *testing.T) {
 	state := NewRunState("run-1", demoSlides(), "rev-1")
-	if _, err := state.Next(false); err != nil {
+	if _, err := state.Next(); err != nil {
 		t.Fatalf("next failed: %v", err)
 	}
-	if _, err := state.Next(false); err != nil {
+	if _, err := state.Next(); err != nil {
 		t.Fatalf("next failed: %v", err)
 	}
 
@@ -82,14 +82,14 @@ func TestRerunRequiresCurrentInteraction(t *testing.T) {
 
 func TestIdempotencySkipsAlreadyDoneStep(t *testing.T) {
 	state := NewRunState("run-1", demoSlides(), "rev-1")
-	if _, err := state.Next(false); err != nil {
+	if _, err := state.Next(); err != nil {
 		t.Fatalf("next failed: %v", err)
 	}
 	if _, err := state.Prev(); err != nil {
 		t.Fatalf("prev failed: %v", err)
 	}
 
-	result, err := state.Next(false)
+	result, err := state.Next()
 	if err != nil {
 		t.Fatalf("next failed: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestIdempotencySkipsAlreadyDoneStep(t *testing.T) {
 
 func TestReloadInvalidatesLedgerOnHashChange(t *testing.T) {
 	state := NewRunState("run-1", demoSlides(), "rev-1")
-	if _, err := state.Next(false); err != nil {
+	if _, err := state.Next(); err != nil {
 		t.Fatalf("next failed: %v", err)
 	}
 

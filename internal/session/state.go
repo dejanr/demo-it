@@ -104,7 +104,7 @@ func (s *RunState) SetDefaultFocusPolicy(policy protocol.FocusPolicy) error {
 	return nil
 }
 
-func (s *RunState) Next(force bool) (TransitionResult, error) {
+func (s *RunState) Next() (TransitionResult, error) {
 	if len(s.Slides) == 0 {
 		return TransitionResult{}, ErrNoSlides
 	}
@@ -114,7 +114,7 @@ func (s *RunState) Next(force bool) (TransitionResult, error) {
 	if nextInteraction < len(current.Interactions) {
 		interaction := current.Interactions[nextInteraction]
 		skipped := false
-		if !force && interaction.IdempotencyKey != "" {
+		if interaction.IdempotencyKey != "" {
 			entry, ok := s.ExecutionLedger[interaction.IdempotencyKey]
 			if ok && entry.Status == "done" && entry.StepHash == interaction.Hash {
 				skipped = true

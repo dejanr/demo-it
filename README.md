@@ -39,7 +39,14 @@ M2 foundation in place:
 
 ## Quick tmux workspace bootstrap
 
-Use path mode to reset/create deterministic tmux sessions for a workspace:
+Use `start` to reset/create deterministic tmux sessions:
+
+```bash
+demo-it start              # bootstrap from current working directory
+demo-it start ./examples/demo
+```
+
+Path mode is still supported and is equivalent to `demo-it start <workspace-path>`:
 
 ```bash
 demo-it ./examples/demo
@@ -49,7 +56,7 @@ For `examples/demo`, this creates:
 - `demo-demo`
 - `demo-notes`
 
-It opens/switches to `demo-demo`; open `demo-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately.
+It opens/switches to `demo-demo`; open `demo-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing.
 
 Session utilities:
 - `demo-it list` lists managed demo-it workspaces with numeric indexes (demo session per workspace)
@@ -70,7 +77,8 @@ To iterate quickly from Neovim:
 2. `:DemoItReload`
 
 Available commands:
-- `:DemoItStart`, `:DemoItStatus`, `:DemoItNext`, `:DemoItPrev`
+- `:DemoItStart [workspace-path]` (defaults to current working directory)
+- `:DemoItStatus`, `:DemoItNext`, `:DemoItPrev`
 - `:DemoItRerun`, `:DemoItReloadState`
 - `:DemoItJump <id|index>`
 - `:DemoItFocus <present|return|none>`
