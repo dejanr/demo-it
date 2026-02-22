@@ -1,0 +1,11 @@
+bin/
+*.out
+*.test
+
+.devenv/
+.direnv/
+result
+result-*
+
+*.sock
+*.log
