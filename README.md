@@ -1,6 +1,6 @@
 # demo-it
 
-`demo-it` is a Go-first backend for transcript-driven live demos.
+`demo-it` runs transcript-driven demonstrations and presentations via CLI and Neovim frontends.
 
 It provides:
 - `demo-itd` daemon: canonical run state + tmux orchestration + idempotent execution
