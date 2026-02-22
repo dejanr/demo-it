@@ -25,7 +25,9 @@ func (c SocketClient) Send(req protocol.Request) (protocol.Response, error) {
 	if err != nil {
 		return protocol.Response{}, fmt.Errorf("dial daemon socket: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 

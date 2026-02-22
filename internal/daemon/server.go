@@ -56,7 +56,9 @@ func (s *Server) Start(ctx context.Context) error {
 		s.wg.Add(1)
 		go func(c net.Conn) {
 			defer s.wg.Done()
-			defer c.Close()
+			defer func() {
+				_ = c.Close()
+			}()
 			s.handleConn(c)
 		}(conn)
 	}

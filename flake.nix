@@ -25,14 +25,23 @@
       systems = [
         "x86_64-linux"
         "aarch64-linux"
-        "x86_64-darwin"
-        "aarch64-darwin"
       ];
 
       perSystem =
         { pkgs, config, ... }:
         {
-          formatter = pkgs.nixfmt-tree;
+          formatter = pkgs.writeShellApplication {
+            name = "demo-it-treefmt";
+            runtimeInputs = with pkgs; [
+              treefmt
+              nixfmt
+              go
+              stylua
+            ];
+            text = ''
+              exec treefmt --config-file ${./treefmt.toml} "$@"
+            '';
+          };
 
           packages.default = config.devenv.shells.default.config.ci;
 

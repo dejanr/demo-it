@@ -1,0 +1,7 @@
+# demo-it Mind Map
+
+[1] **Project Architecture Overview** - Entry point for the transcript-driven demo system, linking the control surface [2], canonical execution model [3], transport contract [4], and development workflow [5].
+[2] **Client Control Surface (CLI + Neovim Plugin)** - `demo-it` CLI and local Neovim commands act as thin clients that forward user intent over the daemon protocol [4], rely on canonical state from [3], and are organized as part of the full architecture map [1] and workflow [5].
+[3] **Canonical Run State and Transition Engine** - `internal/session` owns run status, cursor/history transitions, and idempotent execution ledger semantics consumed by the daemon service via [4], exposed through the client surface [2], and anchored in the architecture index [1] and quality loop [5].
+[4] **Daemon Service and Wire Protocol** - `demo-itd` + `internal/daemon` implement Unix-socket NDJSON request/response handling with validated command envelopes from `internal/protocol`, mediating between user-facing controls [2] and canonical state transitions [3] while fitting the overall architecture [1] and documented workflow [5].
+[5] **Development Environment, Docs, and Verification** - Nix/devenv bootstrap, direnv integration, protocol/plan documentation, and test boundaries provide the iteration framework that keeps control paths [2], runtime state logic [3], and daemon transport [4] coherent within the project overview [1].

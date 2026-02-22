@@ -34,6 +34,8 @@ M2 foundation in place:
 - `flake.nix` + `devenv.nix` provide a reproducible Go shell
 - `.envrc` integrates `direnv` + `devenv`
 - common checks: `fmt`, `lint`, `tests`, `build`, `ci`
+- shared formatting config: `treefmt.toml` (used by both `nix fmt` and `fmt`)
+- `devenv up` runs `demo-itd` with auto-reload via `.air.toml`
 
 ## Neovim plugin (local development)
 
@@ -51,3 +53,6 @@ Available commands:
 - `:DemoItJump <id|index>`
 - `:DemoItFocus <present|return|none>`
 - `:DemoIt <raw cli args...>`
+
+Formatting alignment tip:
+- configure Neovim formatters to call `treefmt --stdin <file> --quiet` so editor formatting matches `nix fmt`/`fmt`.

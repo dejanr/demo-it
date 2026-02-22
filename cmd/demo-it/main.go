@@ -154,7 +154,9 @@ func parseFocusArgs(rawArgs []string) (protocol.Command, json.RawMessage, error)
 	}
 
 	args := protocol.SetFocusPolicyArgs{Focus: protocol.FocusPolicy(*policy)}
+
 	encoded, err := json.Marshal(args)
+
 	if err != nil {
 		return "", nil, fmt.Errorf("encode args: %w", err)
 	}

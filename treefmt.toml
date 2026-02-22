@@ -1,0 +1,21 @@
+[global]
+excludes = [
+  ".devenv/*",
+  ".direnv/*",
+  "result",
+  "result-*",
+  "bin/*",
+]
+
+[formatter.nix]
+command = "nixfmt"
+includes = ["*.nix"]
+
+[formatter.go]
+command = "gofmt"
+options = ["-w"]
+includes = ["*.go"]
+
+[formatter.lua]
+command = "stylua"
+includes = ["*.lua"]

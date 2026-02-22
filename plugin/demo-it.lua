@@ -1,5 +1,5 @@
 if vim.g.loaded_demo_it_plugin == 1 then
-  return
+	return
 end
 vim.g.loaded_demo_it_plugin = 1
 
