@@ -19,10 +19,86 @@ local function base_args()
 	return args
 end
 
-local function system_call(args)
+local function echo_info(message)
+	vim.api.nvim_echo({ { message, "ModeMsg" } }, false, {})
+end
+
+local function decode_json(text)
+	local ok, decoded = pcall(vim.json.decode, text)
+	if ok and type(decoded) == "table" then
+		return decoded
+	end
+	return nil
+end
+
+local function format_transition_output(command, output)
+	if output == "" then
+		echo_info(("demo-it %s: done"):format(command))
+		return
+	end
+
+	local state = decode_json(output)
+	if not state then
+		echo_info(output)
+		return
+	end
+
+	if state.workspace_step_available then
+		local step = tonumber(state.workspace_step)
+		local total = tonumber(state.workspace_total_steps)
+		if step then
+			step = step + 1
+		end
+
+		local details = {}
+		if step and total and total > 0 then
+			table.insert(details, ("slide %d/%d"):format(step, total))
+			table.insert(details, ("step %d"):format(step))
+		elseif step then
+			table.insert(details, ("slide %d"):format(step))
+			table.insert(details, ("step %d"):format(step))
+		end
+		if state.workspace_step_title and state.workspace_step_title ~= "" then
+			table.insert(details, state.workspace_step_title)
+		end
+		if #details > 0 then
+			echo_info(("demo-it %s: %s"):format(command, table.concat(details, ", ")))
+			return
+		end
+	end
+
+	local details = {}
+	local slide = tonumber(state.current_slide)
+	if slide then
+		table.insert(details, ("slide %d"):format(slide + 1))
+	end
+
+	local interaction = tonumber(state.current_interaction)
+	if interaction and interaction >= 0 then
+		local stepDetail = ("step %d"):format(interaction + 1)
+		if state.interaction_id and state.interaction_id ~= "" then
+			stepDetail = stepDetail .. (" (%s)"):format(state.interaction_id)
+		end
+		if state.skipped then
+			stepDetail = stepDetail .. " skipped"
+		end
+		table.insert(details, stepDetail)
+	else
+		table.insert(details, "step -")
+	end
+
+	echo_info(("demo-it %s: %s"):format(command, table.concat(details, ", ")))
+end
+
+local function system_call(args, opts)
+	opts = opts or {}
 	local result = vim.system(args, { text = true }):wait()
 	if result.code == 0 then
 		local output = (result.stdout or ""):gsub("%s+$", "")
+		if opts.on_success then
+			opts.on_success(output)
+			return true
+		end
 		if output ~= "" then
 			vim.notify(output, vim.log.levels.INFO, { title = "demo-it" })
 		end
@@ -34,11 +110,11 @@ local function system_call(args)
 	return false
 end
 
-function M.exec(cli_args)
+function M.exec(cli_args, opts)
 	local args = { M.config.bin }
 	vim.list_extend(args, base_args())
 	vim.list_extend(args, cli_args)
-	return system_call(args)
+	return system_call(args, opts)
 end
 
 function M.reload()
@@ -86,17 +162,29 @@ function M.setup(opts)
 	})
 	set_command("DemoItNext", {
 		fn = function()
-			M.exec({ "next" })
+			M.exec({ "next" }, {
+				on_success = function(output)
+					format_transition_output("next", output)
+				end,
+			})
 		end,
 	})
 	set_command("DemoItPrev", {
 		fn = function()
-			M.exec({ "prev" })
+			M.exec({ "prev" }, {
+				on_success = function(output)
+					format_transition_output("prev", output)
+				end,
+			})
 		end,
 	})
 	set_command("DemoItRerun", {
 		fn = function()
-			M.exec({ "rerun" })
+			M.exec({ "rerun" }, {
+				on_success = function(output)
+					format_transition_output("rerun", output)
+				end,
+			})
 		end,
 	})
 	set_command("DemoItJump", {

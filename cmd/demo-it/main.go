@@ -82,13 +82,23 @@ func run() error {
 		return fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
 	}
 
-	if target == "next" || target == "prev" {
-		if err := advanceWorkspaceStepForCommand(target); err != nil {
+	workspaceTransition := workspaceStepTransition{}
+	if target == "next" || target == "prev" || target == "rerun" {
+		workspaceTransition, err = advanceWorkspaceStepForCommand(target)
+		if err != nil {
 			return err
 		}
 	}
 
-	bytes, err := json.MarshalIndent(resp.State, "", "  ")
+	responseState := resp.State
+	if workspaceTransition.Available {
+		responseState, err = mergeWorkspaceTransition(resp.State, workspaceTransition)
+		if err != nil {
+			return err
+		}
+	}
+
+	bytes, err := json.MarshalIndent(responseState, "", "  ")
 	if err != nil {
 		return fmt.Errorf("format response: %w", err)
 	}
@@ -633,51 +643,124 @@ func renderSpeakerNotes(steps []transcript.Step, stepIndex int) string {
 	return notes + "\n"
 }
 
-func advanceWorkspaceStepForCommand(command string) error {
+type workspaceStepTransition struct {
+	Available       bool
+	StepIndex       int
+	TotalSteps      int
+	StepTitle       string
+	ActionsExecuted bool
+}
+
+func advanceWorkspaceStepForCommand(command string) (workspaceStepTransition, error) {
 	sessions, err := listManagedSessionDetails()
 	if err != nil {
-		return err
+		return workspaceStepTransition{}, err
 	}
 
 	demoSession, notesSession, ok := selectWorkspaceSessions(sessions)
 	if !ok {
-		return nil
+		return workspaceStepTransition{}, nil
 	}
 
 	stepsPath := filepath.Join(demoSession.Workspace, "demo-it.md")
 	steps, err := transcript.ParseStepsFile(stepsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return workspaceStepTransition{}, nil
 		}
-		return fmt.Errorf("parse %s: %w", stepsPath, err)
+		return workspaceStepTransition{}, fmt.Errorf("parse %s: %w", stepsPath, err)
 	}
 	if len(steps) == 0 {
-		return nil
+		return workspaceStepTransition{}, nil
+	}
+
+	currentStep := normalizeStepIndex(demoSession.Step, len(steps))
+	transition := workspaceStepTransition{
+		Available:  true,
+		StepIndex:  currentStep,
+		TotalSteps: len(steps),
+		StepTitle:  stepTitleAt(steps, currentStep),
+	}
+
+	if command == "rerun" {
+		if demoSession.Step < 0 || demoSession.Step >= len(steps) {
+			return transition, nil
+		}
+		if err := runActions(demoSession.Name, steps[demoSession.Step].Actions); err != nil {
+			return workspaceStepTransition{}, err
+		}
+		transition.StepIndex = demoSession.Step
+		transition.StepTitle = stepTitleAt(steps, demoSession.Step)
+		transition.ActionsExecuted = true
+		return transition, nil
 	}
 
 	nextStep, shouldExecuteActions := resolveStepTransition(demoSession.Step, len(steps), command)
 	if nextStep == demoSession.Step {
-		return nil
+		return transition, nil
 	}
 
 	if shouldExecuteActions {
 		if err := runActions(demoSession.Name, steps[nextStep].Actions); err != nil {
-			return err
+			return workspaceStepTransition{}, err
 		}
 	}
 	if err := setSessionMetadata(demoSession.Name, demoSession.Workspace, "demo", nextStep); err != nil {
-		return err
+		return workspaceStepTransition{}, err
 	}
 	if notesSession != nil {
 		if err := setSessionMetadata(notesSession.Name, demoSession.Workspace, "notes", nextStep); err != nil {
-			return err
+			return workspaceStepTransition{}, err
 		}
 		if err := refreshNotesSession(notesSession.Name, demoSession.Workspace, steps, nextStep); err != nil {
-			return err
+			return workspaceStepTransition{}, err
 		}
 	}
-	return nil
+
+	transition.StepIndex = normalizeStepIndex(nextStep, len(steps))
+	transition.StepTitle = stepTitleAt(steps, transition.StepIndex)
+	transition.ActionsExecuted = shouldExecuteActions
+	return transition, nil
+}
+
+func normalizeStepIndex(step int, totalSteps int) int {
+	if totalSteps == 0 {
+		return -1
+	}
+	if step < 0 {
+		return 0
+	}
+	if step >= totalSteps {
+		return totalSteps - 1
+	}
+	return step
+}
+
+func stepTitleAt(steps []transcript.Step, index int) string {
+	if index < 0 || index >= len(steps) {
+		return ""
+	}
+	return strings.TrimSpace(steps[index].Title)
+}
+
+func mergeWorkspaceTransition(state interface{}, transition workspaceStepTransition) (map[string]interface{}, error) {
+	bytes, err := json.Marshal(state)
+	if err != nil {
+		return nil, fmt.Errorf("encode state: %w", err)
+	}
+	merged := map[string]interface{}{}
+	if err := json.Unmarshal(bytes, &merged); err != nil {
+		return nil, fmt.Errorf("decode state: %w", err)
+	}
+
+	merged["workspace_step_available"] = transition.Available
+	merged["workspace_step"] = transition.StepIndex
+	merged["workspace_total_steps"] = transition.TotalSteps
+	if transition.StepTitle != "" {
+		merged["workspace_step_title"] = transition.StepTitle
+	}
+	merged["workspace_actions_executed"] = transition.ActionsExecuted
+	return merged, nil
 }
 
 func resolveStepTransition(currentStep int, totalSteps int, command string) (int, bool) {

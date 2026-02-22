@@ -235,6 +235,38 @@ func TestShouldResetPaneAfterClear(t *testing.T) {
 	}
 }
 
+func TestNormalizeStepIndex(t *testing.T) {
+	if got := normalizeStepIndex(-1, 3); got != 0 {
+		t.Fatalf("normalizeStepIndex(-1,3) = %d, want 0", got)
+	}
+	if got := normalizeStepIndex(9, 3); got != 2 {
+		t.Fatalf("normalizeStepIndex(9,3) = %d, want 2", got)
+	}
+	if got := normalizeStepIndex(1, 3); got != 1 {
+		t.Fatalf("normalizeStepIndex(1,3) = %d, want 1", got)
+	}
+}
+
+func TestMergeWorkspaceTransition(t *testing.T) {
+	state := map[string]any{"current_slide": 1}
+	merged, err := mergeWorkspaceTransition(state, workspaceStepTransition{
+		Available:       true,
+		StepIndex:       2,
+		TotalSteps:      5,
+		StepTitle:       "Open split layout slide",
+		ActionsExecuted: true,
+	})
+	if err != nil {
+		t.Fatalf("mergeWorkspaceTransition: %v", err)
+	}
+	if got, ok := merged["workspace_step"].(int); !ok || got != 2 {
+		t.Fatalf("workspace_step = %#v, want 2", merged["workspace_step"])
+	}
+	if merged["workspace_step_title"] != "Open split layout slide" {
+		t.Fatalf("workspace_step_title = %#v", merged["workspace_step_title"])
+	}
+}
+
 func TestResolveStepTransition(t *testing.T) {
 	next, execute := resolveStepTransition(0, 3, "next")
 	if next != 1 || !execute {
