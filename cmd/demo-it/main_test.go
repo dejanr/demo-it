@@ -32,6 +32,18 @@ func TestFormatOpenSlideCommandEscapesSingleQuote(t *testing.T) {
 	}
 }
 
+func TestShouldOpenSlide(t *testing.T) {
+	if shouldOpenSlide("slides/2-split.md", "slides/2-split.md") {
+		t.Fatal("same slide should not trigger open")
+	}
+	if !shouldOpenSlide("slides/1-intro.md", "slides/2-split.md") {
+		t.Fatal("different slides should trigger open")
+	}
+	if shouldOpenSlide("slides/1-intro.md", "") {
+		t.Fatal("empty target slide should not trigger open")
+	}
+}
+
 func TestIsProtocolCommand(t *testing.T) {
 	if !isProtocolCommand("next") {
 		t.Fatal("expected next to be protocol command")
@@ -132,6 +144,94 @@ func TestSelectPaneToKeep(t *testing.T) {
 	panes := []paneState{{ID: "%9", Index: 2}, {ID: "%1", Index: 0}, {ID: "%2", Index: 1}}
 	if got := selectPaneToKeep(panes); got != "%1" {
 		t.Fatalf("selectPaneToKeep = %q, want %%1", got)
+	}
+}
+
+func TestSelectEditorPanePrefersActiveEditor(t *testing.T) {
+	panes := []paneState{
+		{ID: "%1", Command: "nvim", Active: false},
+		{ID: "%2", Command: "zsh", Active: true},
+		{ID: "%3", Command: "nvim", Active: true},
+	}
+
+	got, ok := selectEditorPane(panes)
+	if !ok {
+		t.Fatal("expected editor pane")
+	}
+	if got != "%3" {
+		t.Fatalf("selectEditorPane = %q, want %%3", got)
+	}
+}
+
+func TestSelectEditorPaneFallsBackToAnyEditor(t *testing.T) {
+	panes := []paneState{
+		{ID: "%1", Command: "zsh", Active: true},
+		{ID: "%2", Command: "nvim", Active: false},
+	}
+
+	got, ok := selectEditorPane(panes)
+	if !ok {
+		t.Fatal("expected editor pane")
+	}
+	if got != "%2" {
+		t.Fatalf("selectEditorPane = %q, want %%2", got)
+	}
+}
+
+func TestSelectEditorPaneReturnsFalseWithoutEditor(t *testing.T) {
+	panes := []paneState{{ID: "%1", Command: "zsh", Active: true}}
+	if _, ok := selectEditorPane(panes); ok {
+		t.Fatal("expected no editor pane")
+	}
+}
+
+func TestSelectPaneForEditorStartPrefersActivePane(t *testing.T) {
+	panes := []paneState{{ID: "%1", Index: 0, Active: false}, {ID: "%2", Index: 1, Active: true}}
+	got, ok := selectPaneForEditorStart(panes)
+	if !ok {
+		t.Fatal("expected pane")
+	}
+	if got != "%2" {
+		t.Fatalf("selectPaneForEditorStart = %q, want %%2", got)
+	}
+}
+
+func TestSelectPaneForEditorStartFallsBackToLowestIndex(t *testing.T) {
+	panes := []paneState{{ID: "%9", Index: 2}, {ID: "%1", Index: 0}, {ID: "%2", Index: 1}}
+	got, ok := selectPaneForEditorStart(panes)
+	if !ok {
+		t.Fatal("expected pane")
+	}
+	if got != "%1" {
+		t.Fatalf("selectPaneForEditorStart = %q, want %%1", got)
+	}
+}
+
+func TestPaneIDsExcludingKeep(t *testing.T) {
+	panes := []paneState{{ID: "%1"}, {ID: "%2"}, {ID: "%3"}}
+	got := paneIDsExcludingKeep(panes, "%1")
+	want := []string{"%2", "%3"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("paneIDsExcludingKeep = %#v, want %#v", got, want)
+	}
+}
+
+func TestPaneCommandByID(t *testing.T) {
+	panes := []paneState{{ID: "%1", Command: "nvim"}, {ID: "%2", Command: "zsh"}}
+	if got := paneCommandByID(panes, "%2"); got != "zsh" {
+		t.Fatalf("paneCommandByID = %q, want zsh", got)
+	}
+	if got := paneCommandByID(panes, "%9"); got != "" {
+		t.Fatalf("paneCommandByID missing = %q, want empty", got)
+	}
+}
+
+func TestShouldResetPaneAfterClear(t *testing.T) {
+	if shouldResetPaneAfterClear("nvim") {
+		t.Fatal("nvim pane should not be reset")
+	}
+	if !shouldResetPaneAfterClear("zsh") {
+		t.Fatal("shell pane should be reset")
 	}
 }
 

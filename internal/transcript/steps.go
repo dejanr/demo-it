@@ -12,12 +12,14 @@ type Action struct {
 	Kind      string `yaml:"kind"`
 	Text      string `yaml:"text,omitempty"`
 	Key       string `yaml:"key,omitempty"`
+	Slide     string `yaml:"slide,omitempty"`
 	Direction string `yaml:"direction,omitempty"`
 	Path      string `yaml:"path,omitempty"`
 }
 
 type Step struct {
 	Title        string   `yaml:"title"`
+	Slide        string   `yaml:"slide,omitempty"`
 	Actions      []Action `yaml:"actions"`
 	SpeakerNotes string   `yaml:"speaker_notes,omitempty"`
 }
@@ -77,8 +79,14 @@ func decodeStep(raw string, line int) (Step, error) {
 	if strings.TrimSpace(step.Title) == "" {
 		return Step{}, fmt.Errorf("demo-it block at line %d: missing title", line)
 	}
+
+	stepSlide := strings.TrimSpace(step.Slide)
+	if stepSlide != "" {
+		step.Actions = append([]Action{{Kind: "open-slide", Path: slideReferenceToPath(stepSlide)}}, step.Actions...)
+		step.Slide = ""
+	}
 	if len(step.Actions) == 0 {
-		return Step{}, fmt.Errorf("demo-it block at line %d: missing actions", line)
+		return Step{}, fmt.Errorf("demo-it block at line %d: missing actions or slide", line)
 	}
 
 	for i, action := range step.Actions {
@@ -90,6 +98,16 @@ func decodeStep(raw string, line int) (Step, error) {
 				return Step{}, fmt.Errorf("demo-it block at line %d: insert-text requires text", line)
 			}
 		case "key":
+			slide := strings.TrimSpace(action.Slide)
+			if slide != "" {
+				if strings.TrimSpace(action.Key) != "" {
+					return Step{}, fmt.Errorf("demo-it block at line %d: key supports key or slide, not both", line)
+				}
+				action.Kind = "open-slide"
+				action.Path = slideReferenceToPath(slide)
+				action.Slide = ""
+				break
+			}
 			if strings.TrimSpace(action.Key) == "" {
 				return Step{}, fmt.Errorf("demo-it block at line %d: key requires key", line)
 			}
@@ -120,4 +138,38 @@ func decodeStep(raw string, line int) (Step, error) {
 	}
 
 	return step, nil
+}
+
+func slideReferenceToPath(reference string) string {
+	trimmed := strings.TrimSpace(reference)
+	if trimmed == "" {
+		return ""
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.HasSuffix(lower, ".md") {
+		return trimmed
+	}
+
+	lastSlash := strings.LastIndex(trimmed, "/")
+	lastDot := strings.LastIndex(trimmed, ".")
+	if lastDot > lastSlash {
+		suffix := trimmed[lastDot+1:]
+		if isNumeric(suffix) {
+			return trimmed[:lastDot] + ".md"
+		}
+		return trimmed
+	}
+	return trimmed + ".md"
+}
+
+func isNumeric(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }

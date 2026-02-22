@@ -278,7 +278,7 @@ func splitPaneAction(targetSession string, direction string) error {
 	if strings.TrimSpace(direction) == "down" {
 		flag = "-v"
 	}
-	if err := runTmux("split-window", flag, "-t", targetSession); err != nil {
+	if err := runTmux("split-window", "-d", flag, "-t", targetSession); err != nil {
 		return fmt.Errorf("split-pane action: %w", err)
 	}
 	return nil
@@ -294,10 +294,14 @@ func clearPanesAction(targetSession string) error {
 	}
 
 	keepPane := selectPaneToKeep(panes)
+	keepCommand := paneCommandByID(panes, keepPane)
 	if len(panes) > 1 {
-		if err := runTmux("kill-pane", "-a", "-t", keepPane); err != nil {
-			return fmt.Errorf("clear-panes action (kill extra panes): %w", err)
+		if err := closeExtraPanesWithCtrlD(targetSession, keepPane, 24, 100*time.Millisecond); err != nil {
+			return err
 		}
+	}
+	if !shouldResetPaneAfterClear(keepCommand) {
+		return nil
 	}
 	if err := runTmux("clear-history", "-t", keepPane); err != nil {
 		return fmt.Errorf("clear-panes action (history): %w", err)
@@ -308,19 +312,103 @@ func clearPanesAction(targetSession string) error {
 	return nil
 }
 
+func closeExtraPanesWithCtrlD(targetSession string, keepPane string, attempts int, delay time.Duration) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+	for i := 0; i < attempts; i++ {
+		panes, err := listSessionPanes(targetSession)
+		if err != nil {
+			return err
+		}
+		extraPaneIDs := paneIDsExcludingKeep(panes, keepPane)
+		if len(extraPaneIDs) == 0 {
+			return nil
+		}
+		for _, paneID := range extraPaneIDs {
+			if err := runTmux("send-keys", "-t", paneID, "C-d"); err != nil {
+				return fmt.Errorf("clear-panes action (ctrl-d %s): %w", paneID, err)
+			}
+		}
+		if i+1 < attempts {
+			time.Sleep(delay)
+		}
+	}
+
+	panes, err := listSessionPanes(targetSession)
+	if err != nil {
+		return err
+	}
+	extraPaneIDs := paneIDsExcludingKeep(panes, keepPane)
+	if len(extraPaneIDs) > 0 {
+		return fmt.Errorf("clear-panes action: could not close panes with ctrl-d: %s", strings.Join(extraPaneIDs, ", "))
+	}
+	return nil
+}
+
+func paneIDsExcludingKeep(panes []paneState, keepPane string) []string {
+	extra := make([]string, 0)
+	for _, pane := range panes {
+		if pane.ID == "" || pane.ID == keepPane {
+			continue
+		}
+		extra = append(extra, pane.ID)
+	}
+	return extra
+}
+
+func paneCommandByID(panes []paneState, paneID string) string {
+	for _, pane := range panes {
+		if pane.ID == paneID {
+			return strings.TrimSpace(pane.Command)
+		}
+	}
+	return ""
+}
+
+func shouldResetPaneAfterClear(command string) bool {
+	return !isEditorCommand(command)
+}
+
 func openSlideAction(targetSession string, path string) error {
 	trimmedPath := strings.TrimSpace(path)
 	if trimmedPath == "" {
 		return errors.New("open-slide action requires path")
 	}
-	if err := runTmux("send-keys", "-t", targetSession, "Escape"); err != nil {
-		return fmt.Errorf("open-slide action (escape): %w", err)
+
+	currentSlide, err := getSessionOption(targetSession, "@demo_it_slide")
+	if err != nil {
+		return err
 	}
-	if err := runTmux("send-keys", "-t", targetSession, formatOpenSlideCommand(trimmedPath)); err != nil {
-		return fmt.Errorf("open-slide action (command): %w", err)
+	if !shouldOpenSlide(currentSlide, trimmedPath) {
+		return nil
 	}
-	if err := runTmux("send-keys", "-t", targetSession, "Enter"); err != nil {
-		return fmt.Errorf("open-slide action (enter): %w", err)
+
+	panes, err := listSessionPanes(targetSession)
+	if err != nil {
+		return err
+	}
+	if paneTarget, ok := selectEditorPane(panes); ok {
+		if err := runTmux("send-keys", "-t", paneTarget, "Escape"); err != nil {
+			return fmt.Errorf("open-slide action (escape): %w", err)
+		}
+		if err := runTmux("send-keys", "-t", paneTarget, formatOpenSlideCommand(trimmedPath)); err != nil {
+			return fmt.Errorf("open-slide action (command): %w", err)
+		}
+		if err := runTmux("send-keys", "-t", paneTarget, "Enter"); err != nil {
+			return fmt.Errorf("open-slide action (enter): %w", err)
+		}
+	} else {
+		paneTarget, ok := selectPaneForEditorStart(panes)
+		if !ok {
+			return errors.New("open-slide action requires at least one pane in the demo session")
+		}
+		if err := startEditorWithSlide(targetSession, paneTarget, trimmedPath); err != nil {
+			return err
+		}
+	}
+	if err := runTmux("set-option", "-t", targetSession, "-q", "@demo_it_slide", trimmedPath); err != nil {
+		return fmt.Errorf("open-slide action (set metadata): %w", err)
 	}
 	return nil
 }
@@ -330,13 +418,48 @@ func formatOpenSlideCommand(path string) string {
 	return ":execute 'edit ' . fnameescape('" + escaped + "')"
 }
 
+func shouldOpenSlide(currentSlide string, nextSlide string) bool {
+	current := strings.TrimSpace(currentSlide)
+	next := strings.TrimSpace(nextSlide)
+	if next == "" {
+		return false
+	}
+	return current != next
+}
+
+func getSessionOption(targetSession string, option string) (string, error) {
+	output, err := runTmuxOutput("show-options", "-qv", "-t", targetSession, option)
+	if err != nil {
+		return "", fmt.Errorf("read tmux option %q for %q: %w", option, targetSession, err)
+	}
+	return strings.TrimSpace(output), nil
+}
+
+func startEditorWithSlide(targetSession string, paneTarget string, slidePath string) error {
+	workspace := ""
+	if workspaceOption, err := getSessionOption(targetSession, "@demo_it_workspace"); err == nil {
+		workspace = strings.TrimSpace(workspaceOption)
+	}
+	args := []string{"respawn-pane", "-k", "-t", paneTarget}
+	if workspace != "" {
+		args = append(args, "-c", workspace)
+	}
+	args = append(args, "nvim", slidePath)
+	if err := runTmux(args...); err != nil {
+		return fmt.Errorf("open-slide action (start nvim): %w", err)
+	}
+	return nil
+}
+
 type paneState struct {
-	ID    string
-	Index int
+	ID      string
+	Index   int
+	Command string
+	Active  bool
 }
 
 func listSessionPanes(targetSession string) ([]paneState, error) {
-	output, err := runTmuxOutput("list-panes", "-t", targetSession, "-F", "#{pane_index}\t#{pane_id}")
+	output, err := runTmuxOutput("list-panes", "-t", targetSession, "-F", "#{pane_index}\t#{pane_id}\t#{pane_current_command}\t#{pane_active}")
 	if err != nil {
 		return nil, fmt.Errorf("list panes for %q: %w", targetSession, err)
 	}
@@ -346,7 +469,7 @@ func listSessionPanes(targetSession string) ([]paneState, error) {
 		if trimmed == "" {
 			continue
 		}
-		parts := strings.SplitN(trimmed, "\t", 2)
+		parts := strings.SplitN(trimmed, "\t", 4)
 		if len(parts) < 2 {
 			continue
 		}
@@ -358,9 +481,52 @@ func listSessionPanes(targetSession string) ([]paneState, error) {
 		if paneID == "" {
 			continue
 		}
-		panes = append(panes, paneState{ID: paneID, Index: idx})
+		command := ""
+		if len(parts) > 2 {
+			command = strings.TrimSpace(parts[2])
+		}
+		active := false
+		if len(parts) > 3 && strings.TrimSpace(parts[3]) == "1" {
+			active = true
+		}
+		panes = append(panes, paneState{ID: paneID, Index: idx, Command: command, Active: active})
 	}
 	return panes, nil
+}
+
+func selectEditorPane(panes []paneState) (string, bool) {
+	for _, pane := range panes {
+		if pane.Active && isEditorCommand(pane.Command) {
+			return pane.ID, true
+		}
+	}
+	for _, pane := range panes {
+		if isEditorCommand(pane.Command) {
+			return pane.ID, true
+		}
+	}
+	return "", false
+}
+
+func selectPaneForEditorStart(panes []paneState) (string, bool) {
+	for _, pane := range panes {
+		if pane.Active {
+			return pane.ID, true
+		}
+	}
+	if len(panes) == 0 {
+		return "", false
+	}
+	return selectPaneToKeep(panes), true
+}
+
+func isEditorCommand(command string) bool {
+	switch strings.ToLower(strings.TrimSpace(command)) {
+	case "nvim", "vim", "vi":
+		return true
+	default:
+		return false
+	}
 }
 
 func selectPaneToKeep(panes []paneState) string {

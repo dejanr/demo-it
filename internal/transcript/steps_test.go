@@ -108,6 +108,111 @@ actions:
 	}
 }
 
+func TestParseStepsMarkdownParsesStepSlideShorthand(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: open
+slide: slides/2-split.2
+` + "```" + `
+`
+
+	steps, err := ParseStepsMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("expected step slide shorthand to parse, got %v", err)
+	}
+	action := steps[0].Actions[0]
+	if action.Kind != "open-slide" {
+		t.Fatalf("step slide shorthand kind = %q, want open-slide", action.Kind)
+	}
+	if action.Path != "slides/2-split.md" {
+		t.Fatalf("step slide shorthand path = %q, want slides/2-split.md", action.Path)
+	}
+}
+
+func TestParseStepsMarkdownParsesStepSlideAndActions(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: open
+slide: slides/intro
+actions:
+  - kind: split-pane
+` + "```" + `
+`
+
+	steps, err := ParseStepsMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("expected step slide with actions to parse, got %v", err)
+	}
+	if len(steps[0].Actions) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(steps[0].Actions))
+	}
+	if steps[0].Actions[0].Kind != "open-slide" {
+		t.Fatalf("first action = %q, want open-slide", steps[0].Actions[0].Kind)
+	}
+	if steps[0].Actions[1].Kind != "split-pane" {
+		t.Fatalf("second action = %q, want split-pane", steps[0].Actions[1].Kind)
+	}
+}
+
+func TestParseStepsMarkdownParsesKeySlideAlias(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: open
+actions:
+  - kind: key
+    slide: slides/2-split.2
+` + "```" + `
+`
+
+	steps, err := ParseStepsMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("expected key slide alias to parse, got %v", err)
+	}
+	action := steps[0].Actions[0]
+	if action.Kind != "open-slide" {
+		t.Fatalf("key slide alias kind = %q, want open-slide", action.Kind)
+	}
+	if action.Path != "slides/2-split.md" {
+		t.Fatalf("key slide alias path = %q, want slides/2-split.md", action.Path)
+	}
+}
+
+func TestParseStepsMarkdownRejectsKeyWithSlideAndKey(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: open
+actions:
+  - kind: key
+    key: return
+    slide: slides/2-split.2
+` + "```" + `
+`
+
+	_, err := ParseStepsMarkdown(markdown)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "key supports key or slide") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseStepsMarkdownRequiresActionsOrSlide(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: open
+` + "```" + `
+`
+
+	_, err := ParseStepsMarkdown(markdown)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "missing actions or slide") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseStepsMarkdownRequiresOpenSlidePath(t *testing.T) {
 	markdown := `
 ` + "```demo-it" + `
@@ -160,6 +265,15 @@ actions:
 	}
 	if !strings.Contains(err.Error(), "split-pane direction") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSlideReferenceToPathAddsMarkdownExtension(t *testing.T) {
+	if got := slideReferenceToPath("slides/intro"); got != "slides/intro.md" {
+		t.Fatalf("slideReferenceToPath = %q, want slides/intro.md", got)
+	}
+	if got := slideReferenceToPath("slides/2-split.2"); got != "slides/2-split.md" {
+		t.Fatalf("slideReferenceToPath numeric alias = %q, want slides/2-split.md", got)
 	}
 }
 
