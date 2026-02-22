@@ -16,8 +16,15 @@ Start with overview nodes `[1-5]`, then follow `[N]` references relevant to the 
 Use Nix + devenv + direnv:
 
 ```bash
-cd /home/dejanr/projects/demo-it
 direnv allow
+```
+
+To run `devenv` scripts inside the Nix sandbox without entering an interactive shell:
+
+```bash
+nix develop --impure --command <script>
+# example:
+nix develop --impure --command tests
 ```
 
 Common workflows:
