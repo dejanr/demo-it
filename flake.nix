@@ -51,9 +51,11 @@
           packages =
             let
               demoItPackage = pkgs.callPackage ./nix/package.nix { };
+              demoItNvimPlugin = pkgs.callPackage ./nix/nvim-plugin.nix { };
             in
             {
               demo-it = demoItPackage;
+              demo-it-nvim = demoItNvimPlugin;
               default = demoItPackage;
             };
 

@@ -4,35 +4,11 @@
 
 It provides:
 
-- `demo-itd` daemon: canonical run state + tmux orchestration + idempotent execution
-- `demo-it` CLI: command client for terminal and Neovim plugin
-- protocol + state machine boundaries with tests
+- `demo-itd` daemon
+- `demo-it` CLI frontend
+- `DemoIt*` nvim plugin
 
-Neovim is intentionally a thin client:
-
-- keymaps and command forwarding
-- slide/speaker rendering
-- no canonical execution state in the editor
-
-## Project layout
-
-- `cmd/demo-it` CLI entrypoint
-- `cmd/demo-itd` daemon entrypoint
-- `internal/protocol` command envelope, args, validation
-- `internal/session` run state, interactions, transitions
-- `docs/PROTOCOL.md` wire protocol draft
-- `docs/CLI-PLAN.md` CLI-focused implementation plan
-
-## Status
-
-M2 foundation in place:
-
-- protocol draft + validation tests
-- core state machine + transition tests
-- daemon socket server with in-memory run service
-- CLI command routing over Unix socket transport
-
-## Dev environment
+## Dev Environment
 
 - `flake.nix` + `devenv.nix` provide a reproducible Go shell
 - `.envrc` integrates `direnv` + `devenv`
@@ -75,9 +51,6 @@ If you use standalone Home Manager, import it in your home config:
 {
   services.demo-it = {
     enable = true;
-    # optional:
-    # socketPath = "$HOME/.local/state/demo-it/demo-it.sock";
-    # extraArgs = [ ];
   };
 }
 ```
@@ -87,6 +60,20 @@ When enabled, the module:
 - installs `demo-it` and `demo-itd`
 - starts `systemd --user` service `demo-itd`
 - exports `DEMO_IT_SOCKET` (by default) so CLI commands target the same daemon
+
+## Nixvim plugin package
+
+The flake also exports a Neovim plugin package as `packages.<system>.demo-it-nvim`.
+
+Example usage from another flake:
+
+```nix
+extraPlugins = [
+  inputs.demo-it.packages.${pkgs.stdenv.hostPlatform.system}.demo-it-nvim
+];
+```
+
+This is the recommended way to share the plugin with nixvim/Home Manager setups.
 
 ## Quick tmux workspace bootstrap
 
@@ -100,15 +87,15 @@ demo-it start ./examples/demo
 Path mode is still supported and is equivalent to `demo-it start <workspace-path>`:
 
 ```bash
-demo-it ./examples/demo
+demo-it ./examples/tmux-splits/
 ```
 
-For `examples/demo`, this creates:
+For `examples/tmux-splits`, this creates:
 
-- `demo-demo`
-- `demo-notes`
+- `tmux-splits-demo`
+- `tmux-splits-notes`
 
-It opens/switches to `demo-demo`; open `demo-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing.
+It opens/switches to `tmux-splits-demo`; open `tmux-splits-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing.
 
 When `demo-it` opens slides in Neovim panes, it now also runs `:DemoItPresentationEnable` (silently when available) so presentation-friendly UI defaults are applied automatically. Demo tmux sessions also start with `status off` for a cleaner stage view.
 
