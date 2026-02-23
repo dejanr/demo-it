@@ -10,4 +10,4 @@ result-*
 *.sock
 *.log
 
-examples/demo/.demo-it
+.demo-it
