@@ -1,6 +1,6 @@
 # demo-it
 
-`demo-it` runs transcript-driven demonstrations and presentations via CLI and Neovim frontends.
+`demo-it` runs transcript-driven demonstrations and presentations via CLI and nvim plugin frontends.
 
 It provides:
 
@@ -13,16 +13,6 @@ Neovim is intentionally a thin client:
 - keymaps and command forwarding
 - slide/speaker rendering
 - no canonical execution state in the editor
-
-## Attribution
-
-This project is strongly inspired by Howard Abrams' [`demo-it`](https://github.com/howardabrams/demo-it).
-I watched his presentation a long time ago, and it stayed with me.
-Many ideas here are a direct nod to his work.
-
-## License
-
-This project is licensed under the MIT License (see `LICENSE`).
 
 ## Project layout
 
@@ -52,12 +42,37 @@ M2 foundation in place:
 
 ## Home Manager module (user daemon)
 
-A Home Manager module is exported as `homeManagerModules.default` (alias: `homeManagerModules.demo-it`) so you can run `demo-itd` as a user service.
+`demo-it` exports a Home Manager module as `homeManagerModules.default` (alias: `homeManagerModules.demo-it`) so you can run `demo-itd` as a user service.
+
+1. Add the flake input:
+
+```nix
+# flake.nix
+inputs.demo-it.url = "github:dejanr/demo-it";
+```
+
+1. Wire the module into Home Manager.
+
+If you use Home Manager through NixOS/nix-darwin, add it to `sharedModules`:
+
+```nix
+home-manager.sharedModules = [
+  inputs.demo-it.homeManagerModules.default
+];
+```
+
+If you use standalone Home Manager, import it in your home config:
 
 ```nix
 {
   imports = [ inputs.demo-it.homeManagerModules.default ];
+}
+```
 
+1. Enable the service in your home configuration:
+
+```nix
+{
   services.demo-it = {
     enable = true;
     # optional:
@@ -95,12 +110,15 @@ For `examples/demo`, this creates:
 
 It opens/switches to `demo-demo`; open `demo-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing.
 
+When `demo-it` opens slides in Neovim panes, it now also runs `:DemoItPresentationEnable` (silently when available) so presentation-friendly UI defaults are applied automatically. Demo tmux sessions also start with `status off` for a cleaner stage view.
+
 Session utilities:
 
 - `demo-it list` lists managed demo-it workspaces with numeric indexes (demo session per workspace)
 - `demo-it notes` opens the notes session for the latest workspace
 - `demo-it kill` kills all managed demo-it tmux sessions
 - `demo-it kill <index ...>` kills selected workspace sessions by index from `demo-it list`
+- inside managed demo-it tmux sessions, `C-s` then `n` runs `demo-it next`, and `C-s` then `p` runs `demo-it prev`
 
 If `demo-it.md` contains `demo-it` fenced blocks, bootstrap runs the first block immediately. Steps with `slide: ...` (or `open-slide`) auto-start Neovim in the demo pane and open that slide, so `insert-text: nvim`/`key:return` is no longer required. `speaker_notes` are intended as post-action guidance before moving to the next block, and are rendered in `demo-notes` (Neovim) and refreshed as `demo-it next`/`demo-it prev` move through steps for the latest workspace. Use `clear-panes` to close extra panes gracefully by sending `C-d` until one pane remains; when the kept pane is a shell, it also clears/resets the terminal, but it skips terminal reset for Neovim panes to avoid UI redraw glitches. Use `split-pane` (right) or `split-pane-vertical` (down) for tmux layout changes while keeping the presenter pane focused; and use slide shorthands (`slide: ...`, `open-slide`, or `key` with `slide`) to open markdown files in a Neovim pane of the demo session.
 
@@ -114,17 +132,50 @@ The repository now includes a local plugin runtime:
 To iterate quickly from Neovim:
 
 1. `:set rtp+=/home/dejanr/projects/demo-it`
-2. `:DemoItReload`
+2. `:lua require("demo-it").setup()`
+3. `:DemoItReload`
 
 Available commands:
 
-- `:DemoItStart [workspace-path]` (defaults to current working directory)
+- `:DemoItStart [workspace-path]` (defaults to current working directory; enables presentation mode on success)
 - `:DemoItStatus`, `:DemoItNext`, `:DemoItPrev`
 - `:DemoItRerun`, `:DemoItReloadState`
 - `:DemoItJump <id|index>`
 - `:DemoItFocus <present|return|none>`
+- `:DemoItPresentationEnable`, `:DemoItPresentationDisable`, `:DemoItPresentationToggle`
+- `:DemoItPreview`, `:DemoItPreviewStop`
 - `:DemoIt <raw cli args...>`
+
+`DemoItPresentation` mode borrows the simple parts of zen/editing plugins: it reduces UI noise (line numbers/signs/status UI), adds light reading padding (`winbar`, `scrolloff`, `sidescrolloff`, extra fold column), turns on wrapping for easier reading, suppresses markdown diagnostics while active, and switches Markdown conceal between rendered (`Normal`) and raw (`Insert`) editing modes.
+
+`DemoItPreview` prefers `:LivePreview start` when available and falls back to `:MarkdownPreview`.
+
+If Neovim runs inside Kitty with remote control enabled (`KITTY_LISTEN_ON`), presentation mode also bumps terminal font size and restores it when disabled.
+
+You can configure presentation font sizing when setting up the plugin:
+
+```lua
+require("demo-it").setup({
+  presentation = {
+    disable_markdown_diagnostics = true, -- default: true
+    font = {
+      neovide_scale = 1.25, -- multiply current neovide_scale_factor
+      kitty_delta = 3, -- kitty @ set-font-size +3 while enabled
+    },
+  },
+})
+```
 
 Formatting alignment tip:
 
 - configure Neovim formatters to call `treefmt --stdin <file> --quiet` so editor formatting matches `nix fmt`/`fmt`.
+
+## Attribution
+
+This project is strongly inspired by Howard Abrams' [`demo-it`](https://github.com/howardabrams/demo-it).
+I watched his presentation a long time ago, and it stayed with me.
+Many ideas here are a direct nod to his work.
+
+## License
+
+This project is licensed under the MIT License (see `LICENSE`).

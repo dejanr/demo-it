@@ -48,12 +48,14 @@
             '';
           };
 
-          packages = let
-            demoItPackage = pkgs.callPackage ./nix/package.nix { };
-          in {
-            demo-it = demoItPackage;
-            default = demoItPackage;
-          };
+          packages =
+            let
+              demoItPackage = pkgs.callPackage ./nix/package.nix { };
+            in
+            {
+              demo-it = demoItPackage;
+              default = demoItPackage;
+            };
 
           devenv.shells.default = {
             name = "demo-it";
