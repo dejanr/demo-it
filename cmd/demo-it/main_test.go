@@ -19,7 +19,7 @@ func TestTmuxKeyNormalizesReturn(t *testing.T) {
 
 func TestFormatOpenSlideCommand(t *testing.T) {
 	got := formatOpenSlideCommand("slides/intro.md")
-	want := ":execute 'edit ' . fnameescape('slides/intro.md')"
+	want := ":execute 'edit ' . fnameescape('slides/intro.md') | silent! DemoItPresentationEnable"
 	if got != want {
 		t.Fatalf("formatOpenSlideCommand() = %q, want %q", got, want)
 	}
@@ -27,7 +27,7 @@ func TestFormatOpenSlideCommand(t *testing.T) {
 
 func TestFormatOpenSlideCommandEscapesSingleQuote(t *testing.T) {
 	got := formatOpenSlideCommand("slides/it's.md")
-	want := ":execute 'edit ' . fnameescape('slides/it''s.md')"
+	want := ":execute 'edit ' . fnameescape('slides/it''s.md') | silent! DemoItPresentationEnable"
 	if got != want {
 		t.Fatalf("formatOpenSlideCommand() = %q, want %q", got, want)
 	}

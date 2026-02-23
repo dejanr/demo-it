@@ -205,6 +205,9 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string, require
 	if err := ensureRunStarted(runID, socketPath); err != nil {
 		return err
 	}
+	if err := ensureDemoNavigationBindings(); err != nil {
+		return err
+	}
 
 	if os.Getenv("TMUX") != "" {
 		return runTmuxWithStdio("switch-client", "-t", demoSession)
@@ -232,6 +235,9 @@ func createSession(name string, cwd string) error {
 	}
 	if err := runTmux("set-option", "-t", name, "-q", "@demo_it", "1"); err != nil {
 		return fmt.Errorf("mark tmux session %q: %w", name, err)
+	}
+	if err := runTmux("set-option", "-t", name, "-q", "status", "off"); err != nil {
+		return fmt.Errorf("hide tmux status for %q: %w", name, err)
 	}
 	return nil
 }
@@ -443,7 +449,7 @@ func openSlideAction(targetSession string, path string) error {
 
 func formatOpenSlideCommand(path string) string {
 	escaped := strings.ReplaceAll(path, "'", "''")
-	return ":execute 'edit ' . fnameescape('" + escaped + "')"
+	return ":execute 'edit ' . fnameescape('" + escaped + "') | silent! DemoItPresentationEnable"
 }
 
 func shouldOpenSlide(currentSlide string, nextSlide string) bool {
@@ -472,7 +478,7 @@ func startEditorWithSlide(targetSession string, paneTarget string, slidePath str
 	if workspace != "" {
 		args = append(args, "-c", workspace)
 	}
-	args = append(args, "nvim", slidePath)
+	args = append(args, "nvim", "+silent! DemoItPresentationEnable", slidePath)
 	if err := runTmux(args...); err != nil {
 		return fmt.Errorf("open-slide action (start nvim): %w", err)
 	}
@@ -624,6 +630,42 @@ func setSessionMetadata(name string, workspace string, role string, step int) er
 	return nil
 }
 
+func ensureDemoNavigationBindings() error {
+	if err := runTmux(
+		"bind-key", "-T", "root", "C-s",
+		"if-shell", "-F", "#{==:#{@demo_it},1}",
+		"switch-client -T demo-it-nav",
+		"send-keys C-s",
+	); err != nil {
+		return fmt.Errorf("bind demo-it prefix key: %w", err)
+	}
+
+	if err := runTmux(
+		"bind-key", "-T", "demo-it-nav", "n",
+		"run-shell", "-b", "demo-it next >/dev/null 2>&1",
+		";", "switch-client", "-T", "root",
+	); err != nil {
+		return fmt.Errorf("bind demo-it next key: %w", err)
+	}
+
+	if err := runTmux(
+		"bind-key", "-T", "demo-it-nav", "p",
+		"run-shell", "-b", "demo-it prev >/dev/null 2>&1",
+		";", "switch-client", "-T", "root",
+	); err != nil {
+		return fmt.Errorf("bind demo-it prev key: %w", err)
+	}
+
+	if err := runTmux("bind-key", "-T", "demo-it-nav", "C-s", "switch-client", "-T", "root"); err != nil {
+		return fmt.Errorf("bind demo-it cancel key: %w", err)
+	}
+	if err := runTmux("bind-key", "-T", "demo-it-nav", "Escape", "switch-client", "-T", "root"); err != nil {
+		return fmt.Errorf("bind demo-it escape key: %w", err)
+	}
+
+	return nil
+}
+
 func refreshNotesSession(notesSession string, workspacePath string, steps []transcript.Step, stepIndex int) error {
 	notesPath := filepath.Join(workspacePath, ".demo-it", "notes.md")
 	if err := os.MkdirAll(filepath.Dir(notesPath), 0o755); err != nil {
@@ -632,7 +674,7 @@ func refreshNotesSession(notesSession string, workspacePath string, steps []tran
 	if err := os.WriteFile(notesPath, []byte(renderSpeakerNotes(steps, stepIndex)), 0o644); err != nil {
 		return fmt.Errorf("write notes file: %w", err)
 	}
-	if err := runTmux("respawn-pane", "-k", "-t", notesSession, "-c", workspacePath, "nvim", notesPath); err != nil {
+	if err := runTmux("respawn-pane", "-k", "-t", notesSession, "-c", workspacePath, "nvim", "+silent! DemoItPresentationEnable", notesPath); err != nil {
 		return fmt.Errorf("refresh notes session %q: %w", notesSession, err)
 	}
 	return nil
