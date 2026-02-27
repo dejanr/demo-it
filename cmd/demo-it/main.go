@@ -643,7 +643,7 @@ func ensureDemoNavigationBindings() error {
 	if err := runTmux(
 		"bind-key", "-T", "demo-it-nav", "n",
 		"run-shell", "-b", "demo-it next >/dev/null 2>&1",
-		";", "switch-client", "-T", "root",
+		"\\;", "switch-client", "-T", "root",
 	); err != nil {
 		return fmt.Errorf("bind demo-it next key: %w", err)
 	}
@@ -651,7 +651,7 @@ func ensureDemoNavigationBindings() error {
 	if err := runTmux(
 		"bind-key", "-T", "demo-it-nav", "p",
 		"run-shell", "-b", "demo-it prev >/dev/null 2>&1",
-		";", "switch-client", "-T", "root",
+		"\\;", "switch-client", "-T", "root",
 	); err != nil {
 		return fmt.Errorf("bind demo-it prev key: %w", err)
 	}
