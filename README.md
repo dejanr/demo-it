@@ -12,7 +12,7 @@ It provides:
 
 - `flake.nix` + `devenv.nix` provide a reproducible Go shell
 - `.envrc` integrates `direnv` + `devenv`
-- common checks: `fmt`, `lint`, `tests`, `build`, `ci`
+- common checks: `fmt`, `lint`, `tests`, `tests-e2e`, `build`, `ci`
 - shared formatting config: `treefmt.toml` (used by both `nix fmt` and `fmt`)
 - `devenv up` runs `demo-itd` with auto-reload via `.air.toml`
 
@@ -104,6 +104,7 @@ Session utilities:
 - `demo-it list` lists managed demo-it workspaces with numeric indexes (demo session per workspace)
 - `demo-it notes` opens the notes session for the latest workspace
 - `demo-it show` opens the demo session for the latest workspace
+- `demo-it trace-next` traces active demo-pane output while executing `next` and writes `.demo-it/traces/*.log` plus normalized `.txt` snapshots
 - `demo-it kill` kills all managed demo-it tmux sessions
 - `demo-it kill <index ...>` kills selected workspace sessions by index from `demo-it list`
 - inside managed demo-it tmux sessions, `C-s` then `n` runs `demo-it next`, and `C-s` then `p` runs `demo-it prev`
@@ -117,6 +118,20 @@ DEMO_IT_DEBUG_LOG=/tmp/demo-it.log demo-it next
 
 Set `DEMO_IT_DEBUG_LOG` on `start` so tmux keybindings inherit the same debug log path.
 The log records tmux commands, pane targeting resolution, and key-macro step playback.
+
+For pane-level tracing, run:
+
+```bash
+demo-it trace-next
+```
+
+This taps the active pane in the latest demo session using `tmux pipe-pane`, runs `next`, writes raw output to `<workspace>/.demo-it/traces/<timestamp>-next-pane-<id>.log`, and writes a normalized textual snapshot to the same path with `.txt` extension.
+
+Snapshot coverage for this flow is available via:
+
+```bash
+tests-e2e
+```
 
 For local development, you can force tmux keybindings to use a specific binary via `DEMO_IT_PATH` on `start`:
 
@@ -134,7 +149,7 @@ bind -N "demo-it next" Space run-shell -b 'out=$("${DEMO_IT_PATH:-demo-it}" next
 bind -N "demo-it prev" BSpace run-shell -b 'out=$("${DEMO_IT_PATH:-demo-it}" prev 2>&1); code=$?; [ "$code" -eq 0 ] || tmux display-message "demo-it prev failed: $(printf "%s" "$out" | tr "\n" " ")"'
 ```
 
-If `demo-it.md` contains `demo-it` fenced blocks, bootstrap runs the first block immediately. Steps with `slide: ...` (or `open-slide`) auto-start Neovim in the demo pane and open that slide, so `insert-text: nvim`/`key:return` is no longer required. `speaker_notes` are intended as post-action guidance before moving to the next block, and are rendered in `demo-notes` (Neovim) and refreshed as `demo-it next`/`demo-it prev` move through steps for the latest workspace. Use `clear-panes` to close extra panes gracefully by sending `C-d` until one pane remains; when the kept pane is a shell, it also clears/resets the terminal, but it skips terminal reset for Neovim panes to avoid UI redraw glitches. Use `split-pane` (right) or `split-pane-vertical` (down) for tmux layout changes while keeping the presenter pane focused; use `key-macro` for timed key playback (`interval_ms` + per-key `delay_ms`) with optional pane targeting (`pane: active|last|left|right|<index>|<pane-id>`); and use slide shorthands (`slide: ...`, `open-slide`, or `key` with `slide`) to open markdown files in a Neovim pane of the demo session.
+If `demo-it.md` contains `demo-it` fenced blocks, bootstrap runs the first block immediately. Steps with `slide: ...` (or `open-slide`) auto-start Neovim in the demo pane and open that slide, so `insert-text: nvim`/`key:return` is no longer required. `speaker_notes` are intended as post-action guidance before moving to the next block, and are rendered in `demo-notes` (Neovim) and refreshed as `demo-it next`/`demo-it prev` move through steps for the latest workspace. Use `killall-pane` to kill all extra panes and keep only the initial pane (lowest pane index). Use `split-pane` (right) or `split-pane-vertical` (down) for tmux layout changes while keeping the presenter pane focused; use `kill-pane` to close the latest pane (highest pane index) in the target session; use `key-macro` for timed key playback (`interval_ms` + per-key `delay_ms`) with optional pane targeting (`pane: active|last|left|right|<index>|<pane-id>`); and use slide shorthands (`slide: ...`, `open-slide`, or `key` with `slide`) to open markdown files in a Neovim pane of the demo session.
 
 Example `key-macro` action:
 

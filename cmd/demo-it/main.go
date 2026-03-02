@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,11 @@ import (
 )
 
 var debugLogFile *os.File
+
+var traceAnsiOSC = regexp.MustCompile(`\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)`)
+var traceAnsiDCS = regexp.MustCompile(`\x1bP(?s:.*?)(?:\x1b\\)`)
+var traceAnsiCSI = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
+var traceAnsiSingle = regexp.MustCompile(`\x1b[@-_]`)
 
 func initDebugLog() error {
 	path := strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))
@@ -109,13 +115,19 @@ func run() error {
 			return fmt.Errorf("start accepts at most one workspace path\n%s", usage)
 		}
 		return bootstrapWorkspace(workspacePath, *runID, *socketPath, true)
+	case "trace-next":
+		return traceNextCommand(*runID, *socketPath)
 	}
 
 	if !isProtocolCommand(target) {
 		return bootstrapWorkspace(target, *runID, *socketPath, false)
 	}
 
-	cmd, args, err := parseSubcommand(target, flag.Args()[1:])
+	return runProtocolCommand(target, flag.Args()[1:], *runID, *socketPath)
+}
+
+func runProtocolCommand(target string, rawArgs []string, runID string, socketPath string) error {
+	cmd, args, err := parseSubcommand(target, rawArgs)
 	if err != nil {
 		return err
 	}
@@ -123,12 +135,12 @@ func run() error {
 	req := protocol.Request{
 		ID:      fmt.Sprintf("cli-%d", time.Now().UnixNano()),
 		Command: cmd,
-		RunID:   *runID,
+		RunID:   runID,
 		Args:    args,
 	}
 
-	c := client.SocketClient{SocketPath: *socketPath}
-	resp, err := sendWithAutoStart(c, req, target, *runID, *socketPath)
+	c := client.SocketClient{SocketPath: socketPath}
+	resp, err := sendWithAutoStart(c, req, target, runID, socketPath)
 	if err != nil {
 		return err
 	}
@@ -161,7 +173,6 @@ func run() error {
 		return fmt.Errorf("format response: %w", err)
 	}
 	fmt.Println(string(bytes))
-
 	return nil
 }
 
@@ -359,8 +370,12 @@ func runActions(targetSession string, actions []transcript.Action) error {
 			if err := splitPaneAction(targetSession, "down"); err != nil {
 				return err
 			}
-		case "clear-panes":
-			if err := clearPanesAction(targetSession); err != nil {
+		case "killall-pane":
+			if err := killAllPaneAction(targetSession); err != nil {
+				return err
+			}
+		case "kill-pane":
+			if err := killPaneAction(targetSession); err != nil {
 				return err
 			}
 		case "open-slide":
@@ -548,64 +563,40 @@ func splitPaneAction(targetSession string, direction string) error {
 	return nil
 }
 
-func clearPanesAction(targetSession string) error {
+func killPaneAction(targetSession string) error {
 	panes, err := listSessionPanes(targetSession)
 	if err != nil {
 		return err
 	}
-	if len(panes) == 0 {
+	if len(panes) <= 1 {
 		return nil
 	}
 
-	keepPane := selectPaneToKeep(panes)
-	keepCommand := paneCommandByID(panes, keepPane)
-	if len(panes) > 1 {
-		if err := closeExtraPanesWithCtrlD(targetSession, keepPane, 24, 100*time.Millisecond); err != nil {
-			return err
-		}
+	targetPane, ok := selectPaneBySelector(panes, "last")
+	if !ok || strings.TrimSpace(targetPane) == "" {
+		return errors.New("kill-pane action: could not resolve latest pane")
 	}
-	if !shouldResetPaneAfterClear(keepCommand) {
-		return nil
-	}
-	if err := runTmux("clear-history", "-t", keepPane); err != nil {
-		return fmt.Errorf("clear-panes action (history): %w", err)
-	}
-	if err := runTmux("send-keys", "-R", "-t", keepPane); err != nil {
-		return fmt.Errorf("clear-panes action (reset): %w", err)
+	if err := runTmux("kill-pane", "-t", targetPane); err != nil {
+		return fmt.Errorf("kill-pane action: %w", err)
 	}
 	return nil
 }
 
-func closeExtraPanesWithCtrlD(targetSession string, keepPane string, attempts int, delay time.Duration) error {
-	if attempts < 1 {
-		attempts = 1
-	}
-	for i := 0; i < attempts; i++ {
-		panes, err := listSessionPanes(targetSession)
-		if err != nil {
-			return err
-		}
-		extraPaneIDs := paneIDsExcludingKeep(panes, keepPane)
-		if len(extraPaneIDs) == 0 {
-			return nil
-		}
-		for _, paneID := range extraPaneIDs {
-			if err := runTmux("send-keys", "-t", paneID, "C-d"); err != nil {
-				return fmt.Errorf("clear-panes action (ctrl-d %s): %w", paneID, err)
-			}
-		}
-		if i+1 < attempts {
-			time.Sleep(delay)
-		}
-	}
-
+func killAllPaneAction(targetSession string) error {
 	panes, err := listSessionPanes(targetSession)
 	if err != nil {
 		return err
 	}
+	if len(panes) <= 1 {
+		return nil
+	}
+
+	keepPane := selectPaneToKeep(panes)
 	extraPaneIDs := paneIDsExcludingKeep(panes, keepPane)
-	if len(extraPaneIDs) > 0 {
-		return fmt.Errorf("clear-panes action: could not close panes with ctrl-d: %s", strings.Join(extraPaneIDs, ", "))
+	for _, paneID := range extraPaneIDs {
+		if err := runTmux("kill-pane", "-t", paneID); err != nil {
+			return fmt.Errorf("killall-pane action: %w", err)
+		}
 	}
 	return nil
 }
@@ -619,19 +610,6 @@ func paneIDsExcludingKeep(panes []paneState, keepPane string) []string {
 		extra = append(extra, pane.ID)
 	}
 	return extra
-}
-
-func paneCommandByID(panes []paneState, paneID string) string {
-	for _, pane := range panes {
-		if pane.ID == paneID {
-			return strings.TrimSpace(pane.Command)
-		}
-	}
-	return ""
-}
-
-func shouldResetPaneAfterClear(command string) bool {
-	return !isEditorCommand(command)
 }
 
 func openSlideAction(targetSession string, path string) error {
@@ -1239,19 +1217,212 @@ func showCommand() error {
 }
 
 func latestWorkspaceSessionByRole(workspaces []managedWorkspace, role string) string {
+	workspace, ok := latestWorkspaceByRole(workspaces, role)
+	if !ok {
+		return ""
+	}
+	switch role {
+	case "demo":
+		return workspace.DemoSession
+	case "notes":
+		return workspace.NotesSession
+	default:
+		return ""
+	}
+}
+
+func latestWorkspaceByRole(workspaces []managedWorkspace, role string) (managedWorkspace, bool) {
 	for _, workspace := range workspaces {
 		switch role {
 		case "demo":
 			if workspace.DemoSession != "" {
-				return workspace.DemoSession
+				return workspace, true
 			}
 		case "notes":
 			if workspace.NotesSession != "" {
-				return workspace.NotesSession
+				return workspace, true
 			}
 		}
 	}
-	return ""
+	return managedWorkspace{}, false
+}
+
+func traceNextCommand(runID string, socketPath string) (err error) {
+	workspaces, err := listManagedWorkspaces()
+	if err != nil {
+		return err
+	}
+	if len(workspaces) == 0 {
+		return errors.New("no demo-it tmux sessions")
+	}
+
+	workspace, ok := latestWorkspaceByRole(workspaces, "demo")
+	if !ok {
+		return errors.New("no demo-it demo session found")
+	}
+	if strings.TrimSpace(workspace.Workspace) == "" {
+		return errors.New("latest demo workspace path is unavailable; restart with 'demo-it start'")
+	}
+
+	paneID, err := activePaneID(workspace.DemoSession)
+	if err != nil {
+		return err
+	}
+
+	logPath := traceLogPath(workspace.Workspace, "next", paneID, time.Now())
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return fmt.Errorf("create trace directory: %w", err)
+	}
+	header := fmt.Sprintf("# demo-it trace-next\n# session: %s\n# pane: %s\n# timestamp: %s\n\n", workspace.DemoSession, paneID, time.Now().Format(time.RFC3339))
+	if err := os.WriteFile(logPath, []byte(header), 0o644); err != nil {
+		return fmt.Errorf("create trace log: %w", err)
+	}
+
+	pipeCommand := fmt.Sprintf("cat >> %s", shellQuote(logPath))
+	if err := runTmux("pipe-pane", "-t", paneID, pipeCommand); err != nil {
+		return fmt.Errorf("start pane trace for %s: %w", paneID, err)
+	}
+	started := true
+	defer func() {
+		if !started {
+			return
+		}
+		stopErr := runTmux("pipe-pane", "-t", paneID)
+		if stopErr != nil && err == nil {
+			err = fmt.Errorf("stop pane trace for %s: %w", paneID, stopErr)
+		}
+	}()
+
+	fmt.Fprintf(os.Stderr, "tracing pane %s -> %s\n", paneID, logPath)
+	if err := runProtocolCommand("next", nil, runID, socketPath); err != nil {
+		return err
+	}
+	if err := runTmux("pipe-pane", "-t", paneID); err != nil {
+		return fmt.Errorf("stop pane trace for %s: %w", paneID, err)
+	}
+	started = false
+
+	textPath, err := writeTraceTextSnapshot(logPath)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "trace saved: %s\n", logPath)
+	fmt.Fprintf(os.Stderr, "trace text: %s\n", textPath)
+	return nil
+}
+
+func activePaneID(sessionName string) (string, error) {
+	output, err := runTmuxOutput("list-panes", "-t", sessionName, "-F", "#{pane_id}\t#{pane_active}")
+	if err != nil {
+		return "", fmt.Errorf("list panes for %s: %w", sessionName, err)
+	}
+
+	paneID, err := parseActivePaneIDOutput(output)
+	if err != nil {
+		return "", fmt.Errorf("resolve active pane for %s: %w", sessionName, err)
+	}
+	return paneID, nil
+}
+
+func parseActivePaneIDOutput(output string) (string, error) {
+	firstPane := ""
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		paneID := strings.TrimSpace(parts[0])
+		active := strings.TrimSpace(parts[1])
+		if paneID == "" {
+			continue
+		}
+		if firstPane == "" {
+			firstPane = paneID
+		}
+		if active == "1" {
+			return paneID, nil
+		}
+	}
+	if firstPane != "" {
+		return firstPane, nil
+	}
+	return "", errors.New("no panes found")
+}
+
+func traceLogPath(workspacePath string, action string, paneID string, now time.Time) string {
+	paneLabel := strings.TrimPrefix(strings.TrimSpace(paneID), "%")
+	if paneLabel == "" {
+		paneLabel = "unknown"
+	}
+	fileName := fmt.Sprintf("%s-%s-pane-%s.log", now.Format("20060102-150405"), action, paneLabel)
+	return filepath.Join(workspacePath, ".demo-it", "traces", fileName)
+}
+
+func traceTextSnapshotPath(rawPath string) string {
+	if strings.HasSuffix(rawPath, ".log") {
+		return strings.TrimSuffix(rawPath, ".log") + ".txt"
+	}
+	return rawPath + ".txt"
+}
+
+func writeTraceTextSnapshot(rawLogPath string) (string, error) {
+	raw, err := os.ReadFile(rawLogPath)
+	if err != nil {
+		return "", fmt.Errorf("read trace log: %w", err)
+	}
+	normalized := normalizeTraceForTextSnapshot(string(raw))
+	textPath := traceTextSnapshotPath(rawLogPath)
+	if err := os.WriteFile(textPath, []byte(normalized), 0o644); err != nil {
+		return "", fmt.Errorf("write trace text snapshot: %w", err)
+	}
+	return textPath, nil
+}
+
+func normalizeTraceForTextSnapshot(raw string) string {
+	cleaned := strings.ReplaceAll(raw, "\r\n", "\n")
+	cleaned = strings.ReplaceAll(cleaned, "\r", "\n")
+	cleaned = traceAnsiOSC.ReplaceAllString(cleaned, "")
+	cleaned = traceAnsiDCS.ReplaceAllString(cleaned, "")
+	cleaned = traceAnsiCSI.ReplaceAllString(cleaned, "")
+	cleaned = traceAnsiSingle.ReplaceAllString(cleaned, "")
+	cleaned = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if r >= 32 && r != 127 {
+			return r
+		}
+		return -1
+	}, cleaned)
+
+	lines := strings.Split(cleaned, "\n")
+	out := make([]string, 0, len(lines))
+	prevBlank := false
+	for _, line := range lines {
+		trimmedRight := strings.TrimRight(line, " \t")
+		if strings.HasPrefix(trimmedRight, "# demo-it trace-next") || strings.HasPrefix(trimmedRight, "# session:") || strings.HasPrefix(trimmedRight, "# pane:") || strings.HasPrefix(trimmedRight, "# timestamp:") {
+			continue
+		}
+		if strings.TrimSpace(trimmedRight) == "" {
+			if prevBlank || len(out) == 0 {
+				continue
+			}
+			out = append(out, "")
+			prevBlank = true
+			continue
+		}
+		out = append(out, trimmedRight)
+		prevBlank = false
+	}
+
+	joined := strings.TrimSpace(strings.Join(out, "\n"))
+	if joined == "" {
+		return ""
+	}
+	return joined + "\n"
 }
 
 func killSessionsCommand(rawArgs []string) error {
@@ -1680,6 +1851,7 @@ Commands:
   list
   notes
   show
+  trace-next
   kill [session-index ...]
 
 Start behavior:
@@ -1694,6 +1866,7 @@ Session lifecycle:
   demo-it list               # show numbered managed workspaces (demo session)
   demo-it notes              # open notes session for latest workspace
   demo-it show               # open demo session for latest workspace
+  demo-it trace-next         # trace active demo pane output while running next
   demo-it kill               # kill all managed sessions
   demo-it kill 1 3           # kill selected workspace indexes from list
 `

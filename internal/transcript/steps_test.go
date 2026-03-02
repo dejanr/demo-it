@@ -71,7 +71,25 @@ actions:
 	}
 }
 
-func TestParseStepsMarkdownParsesClearPanes(t *testing.T) {
+func TestParseStepsMarkdownParsesKillAllPane(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: clear
+actions:
+  - kind: killall-pane
+` + "```" + `
+`
+
+	steps, err := ParseStepsMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("expected killall-pane to parse, got %v", err)
+	}
+	if steps[0].Actions[0].Kind != "killall-pane" {
+		t.Fatalf("unexpected kind: %q", steps[0].Actions[0].Kind)
+	}
+}
+
+func TestParseStepsMarkdownMapsClearPanesToKillAllPane(t *testing.T) {
 	markdown := `
 ` + "```demo-it" + `
 title: clear
@@ -82,9 +100,27 @@ actions:
 
 	steps, err := ParseStepsMarkdown(markdown)
 	if err != nil {
-		t.Fatalf("expected clear-panes to parse, got %v", err)
+		t.Fatalf("expected clear-panes alias to parse, got %v", err)
 	}
-	if steps[0].Actions[0].Kind != "clear-panes" {
+	if steps[0].Actions[0].Kind != "killall-pane" {
+		t.Fatalf("unexpected mapped kind: %q", steps[0].Actions[0].Kind)
+	}
+}
+
+func TestParseStepsMarkdownParsesKillPane(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: close
+actions:
+  - kind: kill-pane
+` + "```" + `
+`
+
+	steps, err := ParseStepsMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("expected kill-pane to parse, got %v", err)
+	}
+	if steps[0].Actions[0].Kind != "kill-pane" {
 		t.Fatalf("unexpected kind: %q", steps[0].Actions[0].Kind)
 	}
 }

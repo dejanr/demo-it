@@ -29,12 +29,12 @@ speaker_notes: |
 ```
 
 ```demo-it
-title: Clear panes and split vertically instead
+title: Kill all extra panes and split vertically instead
 actions:
-  - kind: clear-panes
+  - kind: killall-pane
   - kind: split-pane-vertical
 speaker_notes: |
-  We start this slide with clean panes before layout changes.
+  We start this slide with a single pane before layout changes.
   We can also split downward with the dedicated vertical action.
 ```
 
@@ -42,7 +42,7 @@ speaker_notes: |
 title: Open wrap-up slide
 slide: slides/3-end.2
 actions:
-  - kind: clear-panes
+  - kind: killall-pane
 speaker_notes: |
   Transition to the final slide for closing remarks.
 ```

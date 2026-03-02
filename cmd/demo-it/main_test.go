@@ -294,6 +294,112 @@ func TestLatestWorkspaceSessionByRoleSkipsEmptyEntries(t *testing.T) {
 	}
 }
 
+func TestLatestWorkspaceByRole(t *testing.T) {
+	workspaces := []managedWorkspace{
+		{Display: "a-demo", DemoSession: "a-demo", NotesSession: "a-notes", Workspace: "/tmp/a"},
+		{Display: "b-demo", DemoSession: "b-demo", NotesSession: "b-notes", Workspace: "/tmp/b"},
+	}
+
+	got, ok := latestWorkspaceByRole(workspaces, "demo")
+	if !ok {
+		t.Fatal("expected latest demo workspace")
+	}
+	if got.Workspace != "/tmp/a" {
+		t.Fatalf("latestWorkspaceByRole(demo).Workspace = %q, want /tmp/a", got.Workspace)
+	}
+
+	if _, ok := latestWorkspaceByRole(workspaces, "unknown"); ok {
+		t.Fatal("expected unknown role to be empty")
+	}
+}
+
+func TestParseActivePaneIDOutput(t *testing.T) {
+	paneID, err := parseActivePaneIDOutput("%7\t0\n%9\t1\n")
+	if err != nil {
+		t.Fatalf("parseActivePaneIDOutput error: %v", err)
+	}
+	if paneID != "%9" {
+		t.Fatalf("parseActivePaneIDOutput = %q, want %%9", paneID)
+	}
+}
+
+func TestParseActivePaneIDOutputFallsBackToFirstPane(t *testing.T) {
+	paneID, err := parseActivePaneIDOutput("%3\t0\n%8\t0\n")
+	if err != nil {
+		t.Fatalf("parseActivePaneIDOutput error: %v", err)
+	}
+	if paneID != "%3" {
+		t.Fatalf("parseActivePaneIDOutput = %q, want %%3", paneID)
+	}
+}
+
+func TestParseActivePaneIDOutputErrorsWhenMissing(t *testing.T) {
+	_, err := parseActivePaneIDOutput("\n")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestTraceLogPath(t *testing.T) {
+	now := time.Date(2026, time.March, 2, 13, 20, 10, 0, time.UTC)
+	got := traceLogPath("/tmp/workspace", "next", "%12", now)
+	want := filepath.Join("/tmp/workspace", ".demo-it", "traces", "20260302-132010-next-pane-12.log")
+	if got != want {
+		t.Fatalf("traceLogPath = %q, want %q", got, want)
+	}
+}
+
+func TestTraceTextSnapshotPath(t *testing.T) {
+	got := traceTextSnapshotPath("/tmp/workspace/.demo-it/traces/trace.log")
+	want := "/tmp/workspace/.demo-it/traces/trace.txt"
+	if got != want {
+		t.Fatalf("traceTextSnapshotPath = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeTraceForTextSnapshotGolden(t *testing.T) {
+	raw := "# demo-it trace-next\n" +
+		"# session: demo-demo\n" +
+		"# pane: %12\n" +
+		"# timestamp: 2026-03-02T14:30:00Z\n\n" +
+		"\x1b]0;demo-it\x07\x1b[?25l$ printf 'hello\\n'\r\nhello\r\n$ \x1b[0m\x1bP+q4D73\x1b\\"
+
+	got := normalizeTraceForTextSnapshot(raw)
+	goldenPath := filepath.Join("tests", "testdata", "trace-normalized.golden")
+	wantBytes, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	want := string(wantBytes)
+	if got != want {
+		t.Fatalf("normalizeTraceForTextSnapshot mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestWriteTraceTextSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	rawPath := filepath.Join(dir, "trace.log")
+	raw := "# demo-it trace-next\n# session: x\n# pane: %1\n# timestamp: now\n\n$ echo hi\r\nhi\r\n"
+	if err := os.WriteFile(rawPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write raw trace: %v", err)
+	}
+
+	textPath, err := writeTraceTextSnapshot(rawPath)
+	if err != nil {
+		t.Fatalf("writeTraceTextSnapshot: %v", err)
+	}
+	if textPath != filepath.Join(dir, "trace.txt") {
+		t.Fatalf("textPath = %q, want %q", textPath, filepath.Join(dir, "trace.txt"))
+	}
+	bytes, err := os.ReadFile(textPath)
+	if err != nil {
+		t.Fatalf("read text trace: %v", err)
+	}
+	if string(bytes) != "$ echo hi\nhi\n" {
+		t.Fatalf("unexpected text snapshot: %q", string(bytes))
+	}
+}
+
 func TestSelectPaneToKeep(t *testing.T) {
 	panes := []paneState{{ID: "%9", Index: 2}, {ID: "%1", Index: 0}, {ID: "%2", Index: 1}}
 	if got := selectPaneToKeep(panes); got != "%1" {
@@ -390,25 +496,6 @@ func TestPaneIDsExcludingKeep(t *testing.T) {
 	want := []string{"%2", "%3"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("paneIDsExcludingKeep = %#v, want %#v", got, want)
-	}
-}
-
-func TestPaneCommandByID(t *testing.T) {
-	panes := []paneState{{ID: "%1", Command: "nvim"}, {ID: "%2", Command: "zsh"}}
-	if got := paneCommandByID(panes, "%2"); got != "zsh" {
-		t.Fatalf("paneCommandByID = %q, want zsh", got)
-	}
-	if got := paneCommandByID(panes, "%9"); got != "" {
-		t.Fatalf("paneCommandByID missing = %q, want empty", got)
-	}
-}
-
-func TestShouldResetPaneAfterClear(t *testing.T) {
-	if shouldResetPaneAfterClear("nvim") {
-		t.Fatal("nvim pane should not be reset")
-	}
-	if !shouldResetPaneAfterClear("zsh") {
-		t.Fatal("shell pane should be reset")
 	}
 }
 

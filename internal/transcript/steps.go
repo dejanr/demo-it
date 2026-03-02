@@ -139,7 +139,9 @@ func decodeStep(raw string, line int) (Step, error) {
 			}
 		case "split-pane-vertical":
 			action.Direction = "down"
-		case "clear-panes":
+		case "clear-panes", "killall-pane":
+			action.Kind = "killall-pane"
+		case "kill-pane":
 			// no extra args
 		case "open-slide":
 			if strings.TrimSpace(action.Path) == "" {
