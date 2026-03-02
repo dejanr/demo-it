@@ -124,6 +124,7 @@ For local development, you can force tmux keybindings to use a specific binary v
 DEMO_IT_PATH=./bin/demo-it demo-it start ./examples/key-macro
 ```
 
+On `start`, `demo-it` also writes tmux global environment values (`DEMO_IT_PATH`, `DEMO_IT_SOCKET`) so prefix bindings can execute with the same binary/socket context.
 If `DEMO_IT_PATH` is empty, keybindings use `demo-it` from `PATH`.
 
 If `demo-it.md` contains `demo-it` fenced blocks, bootstrap runs the first block immediately. Steps with `slide: ...` (or `open-slide`) auto-start Neovim in the demo pane and open that slide, so `insert-text: nvim`/`key:return` is no longer required. `speaker_notes` are intended as post-action guidance before moving to the next block, and are rendered in `demo-notes` (Neovim) and refreshed as `demo-it next`/`demo-it prev` move through steps for the latest workspace. Use `clear-panes` to close extra panes gracefully by sending `C-d` until one pane remains; when the kept pane is a shell, it also clears/resets the terminal, but it skips terminal reset for Neovim panes to avoid UI redraw glitches. Use `split-pane` (right) or `split-pane-vertical` (down) for tmux layout changes while keeping the presenter pane focused; use `key-macro` for timed key playback (`interval_ms` + per-key `delay_ms`) with optional pane targeting (`pane: active|last|left|right|<index>|<pane-id>`); and use slide shorthands (`slide: ...`, `open-slide`, or `key` with `slide`) to open markdown files in a Neovim pane of the demo session.

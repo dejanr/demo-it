@@ -259,6 +259,9 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string, require
 		return err
 	}
 	debugf("resolved cli path=%q", cliPath)
+	if err := setTmuxRuntimeEnvironment(cliPath, socketPath); err != nil {
+		return err
+	}
 	if err := ensureDemoNavigationBindings(cliPath, runID, socketPath, strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))); err != nil {
 		return err
 	}
@@ -891,6 +894,16 @@ func setSessionRuntimeContext(name string, runID string, socketPath string) erro
 	debugLogPath := strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))
 	if err := runTmux("set-option", "-t", name, "-q", "@demo_it_debug_log", debugLogPath); err != nil {
 		return fmt.Errorf("set debug log metadata for %q: %w", name, err)
+	}
+	return nil
+}
+
+func setTmuxRuntimeEnvironment(cliPath string, socketPath string) error {
+	if err := runTmux("set-environment", "-g", "DEMO_IT_PATH", cliPath); err != nil {
+		return fmt.Errorf("set tmux DEMO_IT_PATH: %w", err)
+	}
+	if err := runTmux("set-environment", "-g", "DEMO_IT_SOCKET", socketPath); err != nil {
+		return fmt.Errorf("set tmux DEMO_IT_SOCKET: %w", err)
 	}
 	return nil
 }
