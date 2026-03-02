@@ -76,6 +76,17 @@ Notes:
   - rerun current interaction
 - `jump`
   - jump to slide by `slide_id` or `slide_index`
+- `set_auto_next`
+  - configure daemon-owned delayed auto-advance for a run
+  - `enabled: false` clears any pending timer for the run
+  - `enabled: true` schedules one-shot `next` execution after `delay_ms`
+
+Capability names currently advertised by daemon state:
+
+- `set_auto_next`
+- `split_panes`
+- `kill_panes`
+- `key_macro`
 
 ## Command arguments
 
@@ -94,6 +105,23 @@ No command-specific arguments currently used.
 
 - one of `slide_id` or `slide_index` is required.
 
+### `set_auto_next`
+
+```json
+{
+  "enabled": true,
+  "delay_ms": 1500,
+  "cli_path": "/path/to/demo-it",
+  "socket_path": "/run/user/1000/demo-it/demo-it-my-repo.sock",
+  "debug_log_path": "/tmp/demo-it.log",
+  "env": ["PATH=...", "TMUX=", "TMUX_TMPDIR=..."]
+}
+```
+
+- when `enabled` is `true`, `delay_ms > 0`, `cli_path`, and `socket_path` are required.
+- `env` is optional and used by the daemon executor when spawning delayed `next`.
+- when `enabled` is `false`, pending auto-next timer is cleared.
+
 ## State fields returned today
 
 `state` currently exposes:
@@ -102,6 +130,8 @@ No command-specific arguments currently used.
 - `status` (`idle|running|completed|failed`)
 - `current_slide` (zero-based)
 - `transcript_revision` (when present)
+- daemon capability metadata:
+  - `capabilities` (e.g. `set_auto_next`)
 - transition metadata:
   - `last_event`
   - `interaction_id`

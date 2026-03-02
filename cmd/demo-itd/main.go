@@ -29,11 +29,14 @@ func run() error {
 	socketPath := flag.String("socket", defaultSocketPath, "daemon unix socket path")
 	flag.Parse()
 
-	service := daemon.NewService()
-	server := daemon.NewServer(*socketPath, service)
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	return runServer(ctx, *socketPath)
+}
+
+func runServer(ctx context.Context, socketPath string) error {
+	service := daemon.NewService()
+	server := daemon.NewServer(socketPath, service)
 	return server.Start(ctx)
 }

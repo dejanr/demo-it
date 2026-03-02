@@ -17,6 +17,14 @@ const (
 	CommandRerun          Command = "rerun"
 	CommandJump           Command = "jump"
 	CommandSetFocusPolicy Command = "set_focus_policy"
+	CommandSetAutoNext    Command = "set_auto_next"
+)
+
+const (
+	CapabilitySetAutoNext = "set_auto_next"
+	CapabilitySplitPanes  = "split_panes"
+	CapabilityKillPanes   = "kill_panes"
+	CapabilityKeyMacro    = "key_macro"
 )
 
 type FocusPolicy string
@@ -57,6 +65,15 @@ type SetFocusPolicyArgs struct {
 	Focus FocusPolicy `json:"focus"`
 }
 
+type SetAutoNextArgs struct {
+	Enabled      bool     `json:"enabled"`
+	DelayMS      int      `json:"delay_ms,omitempty"`
+	CLIPath      string   `json:"cli_path,omitempty"`
+	SocketPath   string   `json:"socket_path,omitempty"`
+	DebugLogPath string   `json:"debug_log_path,omitempty"`
+	Env          []string `json:"env,omitempty"`
+}
+
 var (
 	ErrInvalidRequest = errors.New("invalid request")
 	ErrInvalidCommand = errors.New("invalid command")
@@ -95,6 +112,24 @@ func (r Request) Validate() error {
 		}
 		if !args.Focus.Valid() {
 			return fmt.Errorf("%w: invalid focus policy %q", ErrInvalidRequest, args.Focus)
+		}
+		return nil
+	case CommandSetAutoNext:
+		var args SetAutoNextArgs
+		if err := decodeArgs(r.Args, &args); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		}
+		if !args.Enabled {
+			return nil
+		}
+		if args.DelayMS <= 0 {
+			return fmt.Errorf("%w: set_auto_next requires delay_ms > 0", ErrInvalidRequest)
+		}
+		if args.CLIPath == "" {
+			return fmt.Errorf("%w: set_auto_next requires cli_path", ErrInvalidRequest)
+		}
+		if args.SocketPath == "" {
+			return fmt.Errorf("%w: set_auto_next requires socket_path", ErrInvalidRequest)
 		}
 		return nil
 	default:

@@ -154,7 +154,7 @@ func runProtocolCommand(target string, rawArgs []string, runID string, socketPat
 
 	workspaceTransition := workspaceStepTransition{}
 	if target == "next" || target == "prev" || target == "rerun" {
-		workspaceTransition, err = advanceWorkspaceStepForCommand(target)
+		workspaceTransition, err = advanceWorkspaceStepForCommand(target, runID, socketPath)
 		if err != nil {
 			return err
 		}
@@ -282,6 +282,9 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string, require
 		return err
 	}
 	if err := ensureDemoNavigationBindings(cliPath, strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))); err != nil {
+		return err
+	}
+	if err := syncAutoNextWithDaemon(steps, currentStep, runID, socketPath); err != nil {
 		return err
 	}
 
@@ -988,7 +991,7 @@ type workspaceStepTransition struct {
 	ActionsExecuted bool
 }
 
-func advanceWorkspaceStepForCommand(command string) (workspaceStepTransition, error) {
+func advanceWorkspaceStepForCommand(command string, runID string, socketPath string) (workspaceStepTransition, error) {
 	debugf("advance workspace command=%q", command)
 	sessions, err := listManagedSessionDetails()
 	if err != nil {
@@ -998,6 +1001,9 @@ func advanceWorkspaceStepForCommand(command string) (workspaceStepTransition, er
 	demoSession, notesSession, ok := selectWorkspaceSessions(sessions)
 	if !ok {
 		debugf("advance workspace no managed sessions")
+		if err := syncAutoNextWithDaemon(nil, -1, runID, socketPath); err != nil {
+			return workspaceStepTransition{}, err
+		}
 		return workspaceStepTransition{}, nil
 	}
 	debugf("advance workspace selected demo=%q notes_present=%v step=%d", demoSession.Name, notesSession != nil, demoSession.Step)
@@ -1006,11 +1012,17 @@ func advanceWorkspaceStepForCommand(command string) (workspaceStepTransition, er
 	steps, err := transcript.ParseStepsFile(stepsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			if syncErr := syncAutoNextWithDaemon(nil, -1, runID, socketPath); syncErr != nil {
+				return workspaceStepTransition{}, syncErr
+			}
 			return workspaceStepTransition{}, nil
 		}
 		return workspaceStepTransition{}, fmt.Errorf("parse %s: %w", stepsPath, err)
 	}
 	if len(steps) == 0 {
+		if err := syncAutoNextWithDaemon(nil, -1, runID, socketPath); err != nil {
+			return workspaceStepTransition{}, err
+		}
 		return workspaceStepTransition{}, nil
 	}
 
@@ -1027,6 +1039,9 @@ func advanceWorkspaceStepForCommand(command string) (workspaceStepTransition, er
 			return transition, nil
 		}
 		if err := runActions(demoSession.Name, steps[demoSession.Step].Actions); err != nil {
+			return workspaceStepTransition{}, err
+		}
+		if err := syncAutoNextWithDaemon(steps, demoSession.Step, runID, socketPath); err != nil {
 			return workspaceStepTransition{}, err
 		}
 		transition.StepIndex = demoSession.Step
@@ -1056,6 +1071,9 @@ func advanceWorkspaceStepForCommand(command string) (workspaceStepTransition, er
 			return workspaceStepTransition{}, err
 		}
 	}
+	if err := syncAutoNextWithDaemon(steps, nextStep, runID, socketPath); err != nil {
+		return workspaceStepTransition{}, err
+	}
 
 	transition.StepIndex = normalizeStepIndex(nextStep, len(steps))
 	transition.StepTitle = stepTitleAt(steps, transition.StepIndex)
@@ -1081,6 +1099,154 @@ func stepTitleAt(steps []transcript.Step, index int) string {
 		return ""
 	}
 	return strings.TrimSpace(steps[index].Title)
+}
+
+func syncAutoNextWithDaemon(steps []transcript.Step, stepIndex int, runID string, socketPath string) error {
+	args, err := autoNextArgsForStep(steps, stepIndex, socketPath)
+	if err != nil {
+		return err
+	}
+
+	supported, err := daemonSupportsCapability(runID, socketPath, protocol.CapabilitySetAutoNext)
+	if err != nil {
+		return err
+	}
+	if !supported {
+		if args.Enabled {
+			return fmt.Errorf("connected daemon does not support %q; restart demo-itd with a newer build", protocol.CapabilitySetAutoNext)
+		}
+		debugf("skip set_auto_next disable run_id=%q (daemon missing capability)", runID)
+		return nil
+	}
+
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return fmt.Errorf("encode set_auto_next args: %w", err)
+	}
+
+	req := protocol.Request{
+		ID:      fmt.Sprintf("cli-auto-next-%d", time.Now().UnixNano()),
+		Command: protocol.CommandSetAutoNext,
+		RunID:   runID,
+		Args:    raw,
+	}
+	debugf("set_auto_next run_id=%q enabled=%v delay_ms=%d socket=%q", runID, args.Enabled, args.DelayMS, socketPath)
+	c := client.SocketClient{SocketPath: socketPath}
+	resp, err := c.Send(req)
+	if err != nil {
+		return fmt.Errorf("set auto-next via daemon: %w", err)
+	}
+	if !resp.OK {
+		if resp.Error == nil {
+			return errors.New("daemon returned unknown error for set_auto_next")
+		}
+		debugf("set_auto_next failed code=%q message=%q", resp.Error.Code, resp.Error.Message)
+		return fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
+	}
+	debugf("set_auto_next ok run_id=%q enabled=%v delay_ms=%d", runID, args.Enabled, args.DelayMS)
+	return nil
+}
+
+func stepAutoSlideDelayMS(steps []transcript.Step, stepIndex int) (int, bool) {
+	if stepIndex < 0 || stepIndex >= len(steps) {
+		return 0, false
+	}
+	if stepIndex+1 >= len(steps) {
+		return 0, false
+	}
+	autoSlideInMS := steps[stepIndex].AutoSlideInMS
+	if autoSlideInMS == nil || *autoSlideInMS <= 0 {
+		return 0, false
+	}
+	return *autoSlideInMS, true
+}
+
+func resolveCLIPathForAutoNext() (string, error) {
+	override := strings.TrimSpace(os.Getenv("DEMO_IT_PATH"))
+	if override != "" {
+		return resolveCLIPath()
+	}
+	executablePath, err := os.Executable()
+	if err == nil && strings.TrimSpace(executablePath) != "" {
+		if resolved, lookErr := exec.LookPath(executablePath); lookErr == nil {
+			return resolved, nil
+		}
+	}
+	return resolveCLIPath()
+}
+
+func autoNextArgsForStep(steps []transcript.Step, stepIndex int, socketPath string) (protocol.SetAutoNextArgs, error) {
+	delayMS, ok := stepAutoSlideDelayMS(steps, stepIndex)
+	if !ok {
+		return protocol.SetAutoNextArgs{Enabled: false}, nil
+	}
+	cliPath, err := resolveCLIPathForAutoNext()
+	if err != nil {
+		return protocol.SetAutoNextArgs{}, err
+	}
+	return protocol.SetAutoNextArgs{
+		Enabled:      true,
+		DelayMS:      delayMS,
+		CLIPath:      cliPath,
+		SocketPath:   socketPath,
+		DebugLogPath: strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG")),
+		Env:          os.Environ(),
+	}, nil
+}
+
+func daemonSupportsCapability(runID string, socketPath string, capability string) (bool, error) {
+	c := client.SocketClient{SocketPath: socketPath}
+	statusReq := protocol.Request{
+		ID:      fmt.Sprintf("cli-capabilities-%d", time.Now().UnixNano()),
+		Command: protocol.CommandStatus,
+		RunID:   runID,
+	}
+
+	resp, err := c.Send(statusReq)
+	if err != nil {
+		return false, fmt.Errorf("check daemon capabilities: %w", err)
+	}
+	if !resp.OK && resp.Error != nil && resp.Error.Code == "run_not_found" {
+		if err := ensureRunStarted(runID, socketPath); err != nil {
+			return false, err
+		}
+		resp, err = c.Send(statusReq)
+		if err != nil {
+			return false, fmt.Errorf("check daemon capabilities: %w", err)
+		}
+	}
+	if !resp.OK {
+		if resp.Error == nil {
+			return false, errors.New("daemon returned unknown error while checking capabilities")
+		}
+		return false, fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
+	}
+	return stateSupportsCapability(resp.State, capability), nil
+}
+
+func stateSupportsCapability(state interface{}, capability string) bool {
+	stateMap, ok := state.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	raw, ok := stateMap["capabilities"]
+	if !ok {
+		return false
+	}
+	values, ok := raw.([]interface{})
+	if !ok {
+		return false
+	}
+	for _, value := range values {
+		capabilityName, ok := value.(string)
+		if !ok {
+			continue
+		}
+		if capabilityName == capability {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeWorkspaceTransition(state interface{}, transition workspaceStepTransition) (map[string]interface{}, error) {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dejanr/demo-it/internal/protocol"
 	"github.com/dejanr/demo-it/internal/transcript"
 )
 
@@ -80,6 +81,34 @@ func TestResolveCLIPathErrorsWithoutDemoItInPath(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "resolve demo-it via PATH") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAutoNextArgsForStepUsesResolvedCLIPath(t *testing.T) {
+	temp := t.TempDir()
+	custom := filepath.Join(temp, "demo-it-local")
+	if err := os.WriteFile(custom, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write custom demo-it: %v", err)
+	}
+
+	auto := 500
+	steps := []transcript.Step{
+		{Title: "one", AutoSlideInMS: &auto, Actions: []transcript.Action{{Kind: "key", Key: "return"}}},
+		{Title: "two", Actions: []transcript.Action{{Kind: "key", Key: "return"}}},
+	}
+
+	t.Setenv("DEMO_IT_PATH", custom)
+	t.Setenv("PATH", "")
+
+	args, err := autoNextArgsForStep(steps, 0, "/tmp/demo.sock")
+	if err != nil {
+		t.Fatalf("autoNextArgsForStep error: %v", err)
+	}
+	if !args.Enabled {
+		t.Fatal("expected auto-next to be enabled")
+	}
+	if args.CLIPath != custom {
+		t.Fatalf("CLIPath = %q, want %q", args.CLIPath, custom)
 	}
 }
 
@@ -545,6 +574,64 @@ func TestResolveStepTransition(t *testing.T) {
 	stays, execute := resolveStepTransition(0, 3, "prev")
 	if stays != 0 || execute {
 		t.Fatalf("prev-at-start transition = (%d,%v), want (0,false)", stays, execute)
+	}
+}
+
+func TestStepAutoSlideDelayMS(t *testing.T) {
+	auto := 1250
+	steps := []transcript.Step{
+		{Title: "one", Actions: []transcript.Action{{Kind: "key", Key: "return"}}},
+		{Title: "two", AutoSlideInMS: &auto, Actions: []transcript.Action{{Kind: "key", Key: "return"}}},
+		{Title: "three", Actions: []transcript.Action{{Kind: "key", Key: "return"}}},
+	}
+
+	if got, ok := stepAutoSlideDelayMS(steps, 1); !ok || got != 1250 {
+		t.Fatalf("stepAutoSlideDelayMS(step=1) = (%d,%v), want (1250,true)", got, ok)
+	}
+	if _, ok := stepAutoSlideDelayMS(steps, 2); ok {
+		t.Fatal("last step should not auto-advance")
+	}
+	if _, ok := stepAutoSlideDelayMS(steps, -1); ok {
+		t.Fatal("invalid index should not auto-advance")
+	}
+}
+
+func TestAutoNextArgsForStepDisablesWhenNoTimer(t *testing.T) {
+	steps := []transcript.Step{
+		{Title: "one", Actions: []transcript.Action{{Kind: "key", Key: "return"}}},
+		{Title: "two", Actions: []transcript.Action{{Kind: "key", Key: "return"}}},
+	}
+
+	args, err := autoNextArgsForStep(steps, 0, "/tmp/demo.sock")
+	if err != nil {
+		t.Fatalf("autoNextArgsForStep error: %v", err)
+	}
+	if args.Enabled {
+		t.Fatalf("args = %#v, want disabled", args)
+	}
+	if args.DelayMS != 0 || args.CLIPath != "" || args.SocketPath != "" || args.DebugLogPath != "" || len(args.Env) != 0 {
+		t.Fatalf("args = %#v, want zero-value disabled args", args)
+	}
+}
+
+func TestStateSupportsCapability(t *testing.T) {
+	state := map[string]interface{}{
+		"capabilities": []interface{}{protocol.CapabilitySetAutoNext, "other"},
+	}
+	if !stateSupportsCapability(state, protocol.CapabilitySetAutoNext) {
+		t.Fatal("expected capability to be detected")
+	}
+	if stateSupportsCapability(state, "missing") {
+		t.Fatal("expected missing capability to be false")
+	}
+}
+
+func TestStateSupportsCapabilityHandlesMissingShape(t *testing.T) {
+	if stateSupportsCapability(map[string]interface{}{}, protocol.CapabilitySetAutoNext) {
+		t.Fatal("expected false for missing capabilities field")
+	}
+	if stateSupportsCapability("invalid", protocol.CapabilitySetAutoNext) {
+		t.Fatal("expected false for non-map state")
 	}
 }
 

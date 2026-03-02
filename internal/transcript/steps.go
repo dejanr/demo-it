@@ -26,10 +26,11 @@ type Action struct {
 }
 
 type Step struct {
-	Title        string   `yaml:"title"`
-	Slide        string   `yaml:"slide,omitempty"`
-	Actions      []Action `yaml:"actions"`
-	SpeakerNotes string   `yaml:"speaker_notes,omitempty"`
+	Title         string   `yaml:"title"`
+	Slide         string   `yaml:"slide,omitempty"`
+	Actions       []Action `yaml:"actions"`
+	SpeakerNotes  string   `yaml:"speaker_notes,omitempty"`
+	AutoSlideInMS *int     `yaml:"auto_slide_in_ms,omitempty"`
 }
 
 func ParseStepsFile(path string) ([]Step, error) {
@@ -92,6 +93,9 @@ func decodeStep(raw string, line int) (Step, error) {
 
 	if strings.TrimSpace(step.Title) == "" {
 		return Step{}, fmt.Errorf("demo-it block at line %d: missing title", line)
+	}
+	if step.AutoSlideInMS != nil && *step.AutoSlideInMS <= 0 {
+		return Step{}, fmt.Errorf("demo-it block at line %d: auto_slide_in_ms must be > 0", line)
 	}
 
 	stepSlide := strings.TrimSpace(step.Slide)

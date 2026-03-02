@@ -13,4 +13,4 @@ This resets and creates:
 
 It opens/switches to `no-slides-demo`.
 
-`demo-it.md` in this workspace uses action-only `demo-it` blocks (no `slide` or `open-slide`), so it is useful when you want to demo shell commands directly.
+`demo-it.md` in this workspace uses action-only `demo-it` blocks (no `slide` or `open-slide`), so it is useful when you want to demo shell commands directly. The first block also demonstrates `auto_slide_in_ms` auto-advance.

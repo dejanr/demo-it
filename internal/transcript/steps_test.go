@@ -144,6 +144,46 @@ actions:
 	}
 }
 
+func TestParseStepsMarkdownParsesAutoSlideInMS(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: auto
+auto_slide_in_ms: 1200
+actions:
+  - kind: key
+    key: return
+` + "```" + `
+`
+
+	steps, err := ParseStepsMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("expected auto_slide_in_ms to parse, got %v", err)
+	}
+	if steps[0].AutoSlideInMS == nil || *steps[0].AutoSlideInMS != 1200 {
+		t.Fatalf("auto_slide_in_ms = %#v, want 1200", steps[0].AutoSlideInMS)
+	}
+}
+
+func TestParseStepsMarkdownRejectsNonPositiveAutoSlideInMS(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: auto
+auto_slide_in_ms: 0
+actions:
+  - kind: key
+    key: return
+` + "```" + `
+`
+
+	_, err := ParseStepsMarkdown(markdown)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "auto_slide_in_ms") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseStepsMarkdownParsesStepSlideShorthand(t *testing.T) {
 	markdown := `
 ` + "```demo-it" + `
