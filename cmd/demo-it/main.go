@@ -254,7 +254,12 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string, require
 	if err := ensureRunStarted(runID, socketPath); err != nil {
 		return err
 	}
-	if err := ensureDemoNavigationBindings(runID, socketPath, strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))); err != nil {
+	cliPath, err := resolveCLIPath()
+	if err != nil {
+		return err
+	}
+	debugf("resolved cli path=%q", cliPath)
+	if err := ensureDemoNavigationBindings(cliPath, runID, socketPath, strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))); err != nil {
 		return err
 	}
 
@@ -795,6 +800,16 @@ func shellQuote(value string) string {
 	return "'" + escaped + "'"
 }
 
+func resolveCLIPath() (string, error) {
+	if path, err := exec.LookPath("demo-it"); err == nil {
+		return path, nil
+	}
+	if path, err := os.Executable(); err == nil {
+		return path, nil
+	}
+	return "", errors.New("resolve demo-it executable path")
+}
+
 func ensureRunStarted(runID string, socketPath string) error {
 	req := protocol.Request{
 		ID:      fmt.Sprintf("cli-%d", time.Now().UnixNano()),
@@ -863,7 +878,7 @@ func setSessionRuntimeContext(name string, runID string, socketPath string) erro
 	return nil
 }
 
-func ensureDemoNavigationBindings(runID string, socketPath string, debugLogPath string) error {
+func ensureDemoNavigationBindings(cliPath string, runID string, socketPath string, debugLogPath string) error {
 	if err := runTmux(
 		"bind-key", "-T", "root", "C-s",
 		"if-shell", "-F", "#{==:#{@demo_it},1}",
@@ -874,8 +889,9 @@ func ensureDemoNavigationBindings(runID string, socketPath string, debugLogPath 
 	}
 
 	nextCommand := fmt.Sprintf(
-		"DEMO_IT_DEBUG_LOG=%s demo-it --run-id %s --socket %s next >/dev/null 2>&1",
+		"DEMO_IT_DEBUG_LOG=%s %s --run-id %s --socket %s next >/dev/null 2>&1",
 		shellQuote(debugLogPath),
+		shellQuote(cliPath),
 		shellQuote(runID),
 		shellQuote(socketPath),
 	)
@@ -888,8 +904,9 @@ func ensureDemoNavigationBindings(runID string, socketPath string, debugLogPath 
 	}
 
 	prevCommand := fmt.Sprintf(
-		"DEMO_IT_DEBUG_LOG=%s demo-it --run-id %s --socket %s prev >/dev/null 2>&1",
+		"DEMO_IT_DEBUG_LOG=%s %s --run-id %s --socket %s prev >/dev/null 2>&1",
 		shellQuote(debugLogPath),
+		shellQuote(cliPath),
 		shellQuote(runID),
 		shellQuote(socketPath),
 	)
