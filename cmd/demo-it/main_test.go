@@ -218,6 +218,19 @@ func TestSelectWorkspacesToKill(t *testing.T) {
 	}
 }
 
+func TestManagedWorkspaceSessionNamesDeduplicates(t *testing.T) {
+	workspaces := []managedWorkspace{
+		{Display: "a-demo", SessionNames: []string{"a-demo", "a-notes", ""}},
+		{Display: "b-demo", SessionNames: []string{"b-demo", "a-notes", "b-notes"}},
+	}
+
+	got := managedWorkspaceSessionNames(workspaces)
+	want := []string{"a-demo", "a-notes", "b-demo", "b-notes"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("managedWorkspaceSessionNames = %#v, want %#v", got, want)
+	}
+}
+
 func TestGroupManagedWorkspacesMergesDemoAndNotes(t *testing.T) {
 	sessions := []managedSession{
 		{Name: "a-demo", Role: "demo", Workspace: "/tmp/a", LastAttached: 10},

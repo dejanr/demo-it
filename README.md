@@ -95,7 +95,7 @@ For `examples/tmux-splits`, this creates:
 - `tmux-splits-demo`
 - `tmux-splits-notes`
 
-It opens/switches to `tmux-splits-demo`; open `tmux-splits-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing.
+It opens/switches to `tmux-splits-demo`; open `tmux-splits-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately. In single-workspace mode, `demo-it start` first kills previously managed demo-it tmux sessions, then creates the new workspace sessions. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing.
 
 When `demo-it` opens slides in Neovim panes, it now also runs `:DemoItPresentationEnable` (silently when available) so presentation-friendly UI defaults are applied automatically. Demo tmux sessions also start with `status off` for a cleaner stage view.
 
@@ -124,14 +124,14 @@ For local development, you can force tmux keybindings to use a specific binary v
 DEMO_IT_PATH=./bin/demo-it demo-it start ./examples/key-macro
 ```
 
-On `start`, `demo-it` also writes tmux global environment values (`DEMO_IT_PATH`, `DEMO_IT_RUN_ID`, `DEMO_IT_SOCKET`) so prefix bindings can execute with the same binary/run/socket context.
+On `start`, `demo-it` also writes tmux global environment values (`DEMO_IT_PATH`, `DEMO_IT_RUN_ID`, `DEMO_IT_SOCKET`) so prefix bindings can execute with matching runtime context.
 If `DEMO_IT_PATH` is empty, keybindings use `demo-it` from `PATH`.
 
 Minimal tmux prefix bindings (for custom tmux configs):
 
 ```tmux
-bind -N "demo-it next" Space run-shell -b '"${DEMO_IT_PATH:-demo-it}" --run-id "${DEMO_IT_RUN_ID:-demo-it}" --socket "${DEMO_IT_SOCKET:-$HOME/.local/state/demo-it/demo-it.sock}" next >/dev/null 2>&1'
-bind -N "demo-it prev" BSpace run-shell -b '"${DEMO_IT_PATH:-demo-it}" --run-id "${DEMO_IT_RUN_ID:-demo-it}" --socket "${DEMO_IT_SOCKET:-$HOME/.local/state/demo-it/demo-it.sock}" prev >/dev/null 2>&1'
+bind -N "demo-it next" Space run-shell -b '"${DEMO_IT_PATH:-demo-it}" next >/dev/null 2>&1'
+bind -N "demo-it prev" BSpace run-shell -b '"${DEMO_IT_PATH:-demo-it}" prev >/dev/null 2>&1'
 ```
 
 If `demo-it.md` contains `demo-it` fenced blocks, bootstrap runs the first block immediately. Steps with `slide: ...` (or `open-slide`) auto-start Neovim in the demo pane and open that slide, so `insert-text: nvim`/`key:return` is no longer required. `speaker_notes` are intended as post-action guidance before moving to the next block, and are rendered in `demo-notes` (Neovim) and refreshed as `demo-it next`/`demo-it prev` move through steps for the latest workspace. Use `clear-panes` to close extra panes gracefully by sending `C-d` until one pane remains; when the kept pane is a shell, it also clears/resets the terminal, but it skips terminal reset for Neovim panes to avoid UI redraw glitches. Use `split-pane` (right) or `split-pane-vertical` (down) for tmux layout changes while keeping the presenter pane focused; use `key-macro` for timed key playback (`interval_ms` + per-key `delay_ms`) with optional pane targeting (`pane: active|last|left|right|<index>|<pane-id>`); and use slide shorthands (`slide: ...`, `open-slide`, or `key` with `slide`) to open markdown files in a Neovim pane of the demo session.

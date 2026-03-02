@@ -215,6 +215,14 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string, require
 	demoSession := runctx.DemoSessionName(workspacePath)
 	notesSession := runctx.NotesSessionName(workspacePath)
 
+	workspaces, err := listManagedWorkspaces()
+	if err != nil {
+		return err
+	}
+	if _, err := killManagedWorkspaceSessions(workspaces); err != nil {
+		return err
+	}
+
 	if err := resetSession(demoSession); err != nil {
 		return err
 	}
@@ -262,7 +270,7 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string, require
 	if err := setTmuxRuntimeEnvironment(cliPath, runID, socketPath); err != nil {
 		return err
 	}
-	if err := ensureDemoNavigationBindings(cliPath, runID, socketPath, strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))); err != nil {
+	if err := ensureDemoNavigationBindings(cliPath, strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))); err != nil {
 		return err
 	}
 
@@ -911,7 +919,7 @@ func setTmuxRuntimeEnvironment(cliPath string, runID string, socketPath string) 
 	return nil
 }
 
-func ensureDemoNavigationBindings(cliPath string, runID string, socketPath string, debugLogPath string) error {
+func ensureDemoNavigationBindings(cliPath string, debugLogPath string) error {
 	if err := runTmux(
 		"bind-key", "-T", "root", "C-s",
 		"if-shell", "-F", "#{==:#{@demo_it},1}",
@@ -922,11 +930,9 @@ func ensureDemoNavigationBindings(cliPath string, runID string, socketPath strin
 	}
 
 	nextCommand := fmt.Sprintf(
-		"DEMO_IT_DEBUG_LOG=%s %s --run-id %s --socket %s next >/dev/null 2>&1",
+		"DEMO_IT_DEBUG_LOG=%s %s next >/dev/null 2>&1",
 		shellQuote(debugLogPath),
 		shellQuote(cliPath),
-		shellQuote(runID),
-		shellQuote(socketPath),
 	)
 	if err := runTmux(
 		"bind-key", "-T", "demo-it-nav", "n",
@@ -937,11 +943,9 @@ func ensureDemoNavigationBindings(cliPath string, runID string, socketPath strin
 	}
 
 	prevCommand := fmt.Sprintf(
-		"DEMO_IT_DEBUG_LOG=%s %s --run-id %s --socket %s prev >/dev/null 2>&1",
+		"DEMO_IT_DEBUG_LOG=%s %s prev >/dev/null 2>&1",
 		shellQuote(debugLogPath),
 		shellQuote(cliPath),
-		shellQuote(runID),
-		shellQuote(socketPath),
 	)
 	if err := runTmux(
 		"bind-key", "-T", "demo-it-nav", "p",
@@ -1265,22 +1269,42 @@ func killSessionsCommand(rawArgs []string) error {
 		return err
 	}
 
+	killedCount, err := killManagedWorkspaceSessions(selected)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("killed %d demo-it tmux session(s)\n", killedCount)
+	return nil
+}
+
+func killManagedWorkspaceSessions(workspaces []managedWorkspace) (int, error) {
+	sessionNames := managedWorkspaceSessionNames(workspaces)
 	killedCount := 0
+	for _, session := range sessionNames {
+		if err := runTmux("kill-session", "-t", session); err != nil {
+			return killedCount, fmt.Errorf("kill tmux session %q: %w", session, err)
+		}
+		killedCount++
+	}
+	return killedCount, nil
+}
+
+func managedWorkspaceSessionNames(workspaces []managedWorkspace) []string {
+	names := make([]string, 0)
 	seen := map[string]struct{}{}
-	for _, workspace := range selected {
+	for _, workspace := range workspaces {
 		for _, session := range workspace.SessionNames {
+			if session == "" {
+				continue
+			}
 			if _, ok := seen[session]; ok {
 				continue
 			}
 			seen[session] = struct{}{}
-			if err := runTmux("kill-session", "-t", session); err != nil {
-				return fmt.Errorf("kill tmux session %q: %w", session, err)
-			}
-			killedCount++
+			names = append(names, session)
 		}
 	}
-	fmt.Printf("killed %d demo-it tmux session(s)\n", killedCount)
-	return nil
+	return names
 }
 
 func selectWorkspacesToKill(workspaces []managedWorkspace, rawArgs []string) ([]managedWorkspace, error) {
