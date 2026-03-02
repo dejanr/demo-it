@@ -930,7 +930,7 @@ func ensureDemoNavigationBindings(cliPath string, debugLogPath string) error {
 	}
 
 	nextCommand := fmt.Sprintf(
-		"DEMO_IT_DEBUG_LOG=%s %s next >/dev/null 2>&1",
+		"__out=$(DEMO_IT_DEBUG_LOG=%s %s next 2>&1); __code=$?; if [ \"$__code\" -ne 0 ]; then __msg=$(printf '%%s' \"$__out\" | tr '\\n' ' '); tmux display-message \"demo-it next failed: $__msg\"; fi",
 		shellQuote(debugLogPath),
 		shellQuote(cliPath),
 	)
@@ -943,7 +943,7 @@ func ensureDemoNavigationBindings(cliPath string, debugLogPath string) error {
 	}
 
 	prevCommand := fmt.Sprintf(
-		"DEMO_IT_DEBUG_LOG=%s %s prev >/dev/null 2>&1",
+		"__out=$(DEMO_IT_DEBUG_LOG=%s %s prev 2>&1); __code=$?; if [ \"$__code\" -ne 0 ]; then __msg=$(printf '%%s' \"$__out\" | tr '\\n' ' '); tmux display-message \"demo-it prev failed: $__msg\"; fi",
 		shellQuote(debugLogPath),
 		shellQuote(cliPath),
 	)

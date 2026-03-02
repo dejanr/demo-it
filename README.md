@@ -127,11 +127,11 @@ DEMO_IT_PATH=./bin/demo-it demo-it start ./examples/key-macro
 On `start`, `demo-it` also writes tmux global environment values (`DEMO_IT_PATH`, `DEMO_IT_RUN_ID`, `DEMO_IT_SOCKET`) so prefix bindings can execute with matching runtime context.
 If `DEMO_IT_PATH` is empty, keybindings use `demo-it` from `PATH`.
 
-Minimal tmux prefix bindings (for custom tmux configs):
+Minimal tmux prefix bindings (for custom tmux configs), including inline error messages:
 
 ```tmux
-bind -N "demo-it next" Space run-shell -b '"${DEMO_IT_PATH:-demo-it}" next >/dev/null 2>&1'
-bind -N "demo-it prev" BSpace run-shell -b '"${DEMO_IT_PATH:-demo-it}" prev >/dev/null 2>&1'
+bind -N "demo-it next" Space run-shell -b 'out=$("${DEMO_IT_PATH:-demo-it}" next 2>&1); code=$?; [ "$code" -eq 0 ] || tmux display-message "demo-it next failed: $(printf "%s" "$out" | tr "\n" " ")"'
+bind -N "demo-it prev" BSpace run-shell -b 'out=$("${DEMO_IT_PATH:-demo-it}" prev 2>&1); code=$?; [ "$code" -eq 0 ] || tmux display-message "demo-it prev failed: $(printf "%s" "$out" | tr "\n" " ")"'
 ```
 
 If `demo-it.md` contains `demo-it` fenced blocks, bootstrap runs the first block immediately. Steps with `slide: ...` (or `open-slide`) auto-start Neovim in the demo pane and open that slide, so `insert-text: nvim`/`key:return` is no longer required. `speaker_notes` are intended as post-action guidance before moving to the next block, and are rendered in `demo-notes` (Neovim) and refreshed as `demo-it next`/`demo-it prev` move through steps for the latest workspace. Use `clear-panes` to close extra panes gracefully by sending `C-d` until one pane remains; when the kept pane is a shell, it also clears/resets the terminal, but it skips terminal reset for Neovim panes to avoid UI redraw glitches. Use `split-pane` (right) or `split-pane-vertical` (down) for tmux layout changes while keeping the presenter pane focused; use `key-macro` for timed key playback (`interval_ms` + per-key `delay_ms`) with optional pane targeting (`pane: active|last|left|right|<index>|<pane-id>`); and use slide shorthands (`slide: ...`, `open-slide`, or `key` with `slide`) to open markdown files in a Neovim pane of the demo session.
