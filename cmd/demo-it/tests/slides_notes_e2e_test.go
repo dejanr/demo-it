@@ -72,7 +72,7 @@ func TestE2ESlidesAndSpeakerNotesStayInSync(t *testing.T) {
 	h.createManagedNotesSession(t, notesSession, workspace, "sh", 0)
 
 	runAndParseState(t, h, "next")
-	state := runAndParseState(t, h, "status")
+	state := runAndParseState(t, h, "run-status")
 	if got := sessionOption(t, h, demoSession, "@demo_it_slide"); got != "slides/1-intro.md" {
 		t.Fatalf("slide option after step 1 = %q, want %q", got, "slides/1-intro.md")
 	}
@@ -82,7 +82,7 @@ func TestE2ESlidesAndSpeakerNotesStayInSync(t *testing.T) {
 	waitForPaneContains(t, h, notesSession, "NOTE_ONE", 3*time.Second)
 
 	runAndParseState(t, h, "next")
-	state = runAndParseState(t, h, "status")
+	state = runAndParseState(t, h, "run-status")
 	if got := sessionOption(t, h, demoSession, "@demo_it_slide"); got != "slides/2-middle.md" {
 		t.Fatalf("slide option after step 2 = %q, want %q", got, "slides/2-middle.md")
 	}
@@ -92,7 +92,7 @@ func TestE2ESlidesAndSpeakerNotesStayInSync(t *testing.T) {
 	waitForPaneContains(t, h, notesSession, "NOTE_TWO", 3*time.Second)
 
 	runAndParseState(t, h, "next")
-	state = runAndParseState(t, h, "status")
+	state = runAndParseState(t, h, "run-status")
 	if got := sessionOption(t, h, demoSession, "@demo_it_slide"); got != "slides/3-final.md" {
 		t.Fatalf("slide option after step 3 = %q, want %q", got, "slides/3-final.md")
 	}

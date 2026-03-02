@@ -190,6 +190,12 @@ func TestIsProtocolCommand(t *testing.T) {
 	if !isProtocolCommand("next") {
 		t.Fatal("expected next to be protocol command")
 	}
+	if !isProtocolCommand("run-status") {
+		t.Fatal("expected run-status to be protocol command")
+	}
+	if isProtocolCommand("status") {
+		t.Fatal("status should be session command")
+	}
 	if isProtocolCommand("./examples/demo") {
 		t.Fatal("path should not be protocol command")
 	}
@@ -230,20 +236,8 @@ func TestSelectWorkspacesToKill(t *testing.T) {
 		t.Fatalf("select all = %#v, want %#v", all, workspaces)
 	}
 
-	some, err := selectWorkspacesToKill(workspaces, []string{"2", "1", "2"})
-	if err != nil {
-		t.Fatalf("select some: %v", err)
-	}
-	wantSome := []managedWorkspace{workspaces[1], workspaces[0]}
-	if !reflect.DeepEqual(some, wantSome) {
-		t.Fatalf("select some = %#v, want %#v", some, wantSome)
-	}
-
-	if _, err := selectWorkspacesToKill(workspaces, []string{"x"}); err == nil {
-		t.Fatal("expected error for non-numeric index")
-	}
-	if _, err := selectWorkspacesToKill(workspaces, []string{"9"}); err == nil {
-		t.Fatal("expected error for out-of-range index")
+	if _, err := selectWorkspacesToKill(workspaces, []string{"1"}); err == nil {
+		t.Fatal("expected error when kill is called with indexes")
 	}
 }
 

@@ -30,7 +30,8 @@ Neovim scope is intentionally small:
 ## Initial commands
 
 - `demo-it start`
-- `demo-it status`
+- `demo-it status` (managed workspace/session status)
+- `demo-it run-status` (daemon run state)
 - `demo-it reload`
 - `demo-it next`
 - `demo-it prev`

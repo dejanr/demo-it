@@ -93,8 +93,12 @@ func run() error {
 	target := flag.Arg(0)
 	debugf("dispatch target=%q", target)
 	switch target {
+	case "status":
+		return statusCommand(*runID, *socketPath)
+	case "run-status":
+		return runProtocolCommand("status", flag.Args()[1:], *runID, *socketPath)
 	case "list":
-		return listSessionsCommand()
+		return fmt.Errorf("'list' was removed; use 'status'")
 	case "kill":
 		return killSessionsCommand(flag.Args()[1:])
 	case "notes":
@@ -1373,7 +1377,7 @@ func selectWorkspaceSessions(sessions []managedSession) (managedSession, *manage
 	return demo, notes, true
 }
 
-func listSessionsCommand() error {
+func statusCommand(runID string, socketPath string) error {
 	workspaces, err := listManagedWorkspaces()
 	if err != nil {
 		return err
@@ -1382,10 +1386,45 @@ func listSessionsCommand() error {
 		fmt.Println("no demo-it tmux sessions")
 		return nil
 	}
-	for idx, workspace := range workspaces {
-		fmt.Printf("%d\t%s\n", idx+1, workspace.Display)
+
+	active := workspaces[0]
+	status := map[string]any{
+		"workspace":     active.Workspace,
+		"demo_session":  active.DemoSession,
+		"notes_session": active.NotesSession,
 	}
+	if daemonState, ok := daemonRunStatusState(runID, socketPath); ok {
+		status["run"] = daemonState
+	}
+
+	bytes, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		return fmt.Errorf("format status response: %w", err)
+	}
+	fmt.Println(string(bytes))
 	return nil
+}
+
+func daemonRunStatusState(runID string, socketPath string) (map[string]any, bool) {
+	req := protocol.Request{
+		ID:      fmt.Sprintf("cli-status-%d", time.Now().UnixNano()),
+		Command: protocol.CommandStatus,
+		RunID:   runID,
+	}
+	c := client.SocketClient{SocketPath: socketPath}
+	resp, err := c.Send(req)
+	if err != nil || !resp.OK {
+		return nil, false
+	}
+	bytes, err := json.Marshal(resp.State)
+	if err != nil {
+		return nil, false
+	}
+	state := map[string]any{}
+	if err := json.Unmarshal(bytes, &state); err != nil {
+		return nil, false
+	}
+	return state, true
 }
 
 func notesCommand() error {
@@ -1691,27 +1730,10 @@ func managedWorkspaceSessionNames(workspaces []managedWorkspace) []string {
 }
 
 func selectWorkspacesToKill(workspaces []managedWorkspace, rawArgs []string) ([]managedWorkspace, error) {
-	if len(rawArgs) == 0 {
-		return workspaces, nil
+	if len(rawArgs) > 0 {
+		return nil, errors.New("kill does not accept session indexes; use 'demo-it kill'")
 	}
-
-	selected := make([]managedWorkspace, 0, len(rawArgs))
-	seen := map[int]struct{}{}
-	for _, arg := range rawArgs {
-		idx, err := strconv.Atoi(arg)
-		if err != nil {
-			return nil, fmt.Errorf("kill expects numeric session indexes from 'demo-it list', got %q", arg)
-		}
-		if idx < 1 || idx > len(workspaces) {
-			return nil, fmt.Errorf("kill index out of range: %d (valid: 1..%d)", idx, len(workspaces))
-		}
-		if _, ok := seen[idx]; ok {
-			continue
-		}
-		seen[idx] = struct{}{}
-		selected = append(selected, workspaces[idx-1])
-	}
-	return selected, nil
+	return workspaces, nil
 }
 
 func listManagedWorkspaces() ([]managedWorkspace, error) {
@@ -1946,7 +1968,7 @@ func runTmuxWithStdio(args ...string) error {
 
 func isProtocolCommand(name string) bool {
 	switch name {
-	case "start", "status", "reload", "next", "prev", "rerun", "jump", "focus":
+	case "start", "run-status", "reload", "next", "prev", "rerun", "jump", "focus":
 		return true
 	default:
 		return false
@@ -1957,7 +1979,7 @@ func parseSubcommand(name string, rawArgs []string) (protocol.Command, json.RawM
 	switch name {
 	case "start":
 		return protocol.CommandStart, nil, nil
-	case "status":
+	case "status", "run-status":
 		return protocol.CommandStatus, nil, nil
 	case "reload":
 		return protocol.CommandReload, nil, nil
@@ -2054,17 +2076,17 @@ const usage = `Usage:
 Commands:
   start [workspace-path]
   status
+  run-status
   reload
   next
   prev
   rerun
   jump --slide <id|index>
   focus --policy <present|return|none>
-  list
   notes
   show
   trace-next
-  kill [session-index ...]
+  kill
 
 Start behavior:
   start (without a path) bootstraps the current working directory.
@@ -2075,10 +2097,10 @@ Workspace mode:
   Passing a workspace path directly is equivalent to start <workspace-path>.
 
 Session lifecycle:
-  demo-it list               # show numbered managed workspaces (demo session)
-  demo-it notes              # open notes session for latest workspace
-  demo-it show               # open demo session for latest workspace
+  demo-it status             # show active managed workspace/session status
+  demo-it run-status         # show daemon run state JSON
+  demo-it notes              # open notes session for active workspace
+  demo-it show               # open demo session for active workspace
   demo-it trace-next         # trace active demo pane output while running next
-  demo-it kill               # kill all managed sessions
-  demo-it kill 1 3           # kill selected workspace indexes from list
+  demo-it kill               # kill managed sessions
 `

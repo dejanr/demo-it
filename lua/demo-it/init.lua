@@ -652,7 +652,7 @@ function M.setup(opts)
 	})
 	set_command("DemoItStatus", {
 		fn = function()
-			M.exec({ "status" })
+			M.exec({ "run-status" })
 		end,
 	})
 	set_command("DemoItReloadState", {

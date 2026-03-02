@@ -96,18 +96,18 @@ For `examples/tmux-splits`, this creates:
 - `tmux-splits-demo`
 - `tmux-splits-notes`
 
-It opens/switches to `tmux-splits-demo`; open `tmux-splits-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately. In single-workspace mode, `demo-it start` first kills previously managed demo-it tmux sessions, then creates the new workspace sessions. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing. Slide assets are optional: action-only transcripts (for shell demos) also work, see `examples/no-slides`.
+It opens/switches to `tmux-splits-demo`; open `tmux-splits-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it run-status` and `demo-it next` are available immediately. In single-workspace mode, `demo-it start` first kills previously managed demo-it tmux sessions, then creates the new workspace sessions. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing. Slide assets are optional: action-only transcripts (for shell demos) also work, see `examples/no-slides`.
 
 When `demo-it` opens slides in Neovim panes, it now also runs `:DemoItPresentationEnable` (silently when available) so presentation-friendly UI defaults are applied automatically. Demo tmux sessions also start with `status off` for a cleaner stage view.
 
 Session utilities:
 
-- `demo-it list` lists managed demo-it workspaces with numeric indexes (demo session per workspace)
-- `demo-it notes` opens the notes session for the latest workspace
-- `demo-it show` opens the demo session for the latest workspace
+- `demo-it status` shows the active managed workspace/session status
+- `demo-it run-status` shows daemon run-state JSON
+- `demo-it notes` opens the notes session for the active workspace
+- `demo-it show` opens the demo session for the active workspace
 - `demo-it trace-next` traces active demo-pane output while executing `next` and writes `.demo-it/traces/*.log` plus normalized `.txt` snapshots
-- `demo-it kill` kills all managed demo-it tmux sessions
-- `demo-it kill <index ...>` kills selected workspace sessions by index from `demo-it list`
+- `demo-it kill` kills managed demo-it tmux sessions
 - inside managed demo-it tmux sessions, `C-s` then `n` runs `demo-it next`, and `C-s` then `p` runs `demo-it prev`
 
 For action-level debugging, set `DEMO_IT_DEBUG_LOG` to a file path before running commands:
