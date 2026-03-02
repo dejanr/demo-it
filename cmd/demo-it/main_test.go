@@ -18,6 +18,18 @@ func TestTmuxKeyNormalizesReturn(t *testing.T) {
 	}
 }
 
+func TestTmuxKeyNormalizesCommonSpecialKeys(t *testing.T) {
+	if got := tmuxKey("escape"); got != "Escape" {
+		t.Fatalf("tmuxKey(escape) = %q, want Escape", got)
+	}
+	if got := tmuxKey("space"); got != "Space" {
+		t.Fatalf("tmuxKey(space) = %q, want Space", got)
+	}
+	if got := tmuxKey("tab"); got != "Tab" {
+		t.Fatalf("tmuxKey(tab) = %q, want Tab", got)
+	}
+}
+
 func TestKeyMacroPlayback(t *testing.T) {
 	interval := 90
 	delay := 250
@@ -280,6 +292,29 @@ func TestSelectPaneForEditorStartFallsBackToLowestIndex(t *testing.T) {
 	}
 	if got != "%1" {
 		t.Fatalf("selectPaneForEditorStart = %q, want %%1", got)
+	}
+}
+
+func TestSelectPaneBySelector(t *testing.T) {
+	panes := []paneState{{ID: "%1", Index: 0, Active: false}, {ID: "%2", Index: 1, Active: true}, {ID: "%3", Index: 2, Active: false}}
+
+	if got, ok := selectPaneBySelector(panes, "active"); !ok || got != "%2" {
+		t.Fatalf("selectPaneBySelector(active) = (%q,%v), want (%%2,true)", got, ok)
+	}
+	if got, ok := selectPaneBySelector(panes, "last"); !ok || got != "%3" {
+		t.Fatalf("selectPaneBySelector(last) = (%q,%v), want (%%3,true)", got, ok)
+	}
+	if got, ok := selectPaneBySelector(panes, "left"); !ok || got != "%1" {
+		t.Fatalf("selectPaneBySelector(left) = (%q,%v), want (%%1,true)", got, ok)
+	}
+	if got, ok := selectPaneBySelector(panes, "1"); !ok || got != "%2" {
+		t.Fatalf("selectPaneBySelector(1) = (%q,%v), want (%%2,true)", got, ok)
+	}
+	if got, ok := selectPaneBySelector(panes, "%3"); !ok || got != "%3" {
+		t.Fatalf("selectPaneBySelector(%%3) = (%q,%v), want (%%3,true)", got, ok)
+	}
+	if _, ok := selectPaneBySelector(panes, "missing"); ok {
+		t.Fatal("expected selector miss")
 	}
 }
 

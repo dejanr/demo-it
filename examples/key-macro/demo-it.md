@@ -10,9 +10,32 @@ speaker_notes: |
 ```
 
 ```demo-it
-title: Type using key macro
+title: Split right pane for macro target
+actions:
+  - kind: split-pane
+    direction: right
+speaker_notes: |
+  We keep the presenter focus on the left pane and use the right pane as macro target.
+```
+
+```demo-it
+title: Start Neovim in right pane
+actions:
+  - kind: insert-text
+    pane: last
+    text: nvim
+  - kind: key
+    pane: last
+    key: return
+speaker_notes: |
+  This starts a dedicated editor in the right pane where key macros will be replayed.
+```
+
+```demo-it
+title: Type using key macro in right pane
 actions:
   - kind: key-macro
+    pane: last
     interval_ms: 65
     keys:
       - key: i
@@ -30,13 +53,14 @@ actions:
         delay_ms: 300
       - key: escape
 speaker_notes: |
-  This replays a deterministic key sequence with per-key timing.
+  This replays a deterministic key sequence with per-key timing into the right pane.
 ```
 
 ```demo-it
 title: Add a second line with different pacing
 actions:
   - kind: key-macro
+    pane: last
     interval_ms: 40
     keys:
       - key: o

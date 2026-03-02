@@ -20,6 +20,7 @@ type Action struct {
 	Slide      string        `yaml:"slide,omitempty"`
 	Direction  string        `yaml:"direction,omitempty"`
 	Path       string        `yaml:"path,omitempty"`
+	Pane       string        `yaml:"pane,omitempty"`
 	IntervalMS *int          `yaml:"interval_ms,omitempty"`
 	Keys       []KeyMacroKey `yaml:"keys,omitempty"`
 }

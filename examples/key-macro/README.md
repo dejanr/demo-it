@@ -13,8 +13,10 @@ This resets and creates:
 
 It opens/switches to `key-macro-demo`.
 
-`demo-it.md` includes three `demo-it` blocks:
+`demo-it.md` includes five `demo-it` blocks:
 
 1. open Neovim directly on the slide (`slide: slides/1-macro.1`)
-2. replay timed keys with `key-macro` and per-key `delay_ms`
-3. replay a second `key-macro` step with a faster `interval_ms`
+2. split tmux pane to the right (`split-pane`)
+3. start Neovim in the right pane (`insert-text` + `key` with `pane: last`)
+4. replay timed keys in the right pane (`key-macro`, `pane: last`, per-key `delay_ms`)
+5. replay a second `key-macro` step with a faster `interval_ms`

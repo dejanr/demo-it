@@ -269,11 +269,19 @@ func runActions(targetSession string, actions []transcript.Action) error {
 	for _, action := range actions {
 		switch action.Kind {
 		case "insert-text":
-			if err := runTmux("send-keys", "-t", targetSession, action.Text); err != nil {
+			targetPane, err := resolveActionTarget(targetSession, action.Pane)
+			if err != nil {
+				return fmt.Errorf("insert-text action: %w", err)
+			}
+			if err := runTmux("send-keys", "-t", targetPane, action.Text); err != nil {
 				return fmt.Errorf("insert-text action: %w", err)
 			}
 		case "key":
-			if err := runTmux("send-keys", "-t", targetSession, tmuxKey(action.Key)); err != nil {
+			targetPane, err := resolveActionTarget(targetSession, action.Pane)
+			if err != nil {
+				return fmt.Errorf("key action: %w", err)
+			}
+			if err := runTmux("send-keys", "-t", targetPane, tmuxKey(action.Key)); err != nil {
 				return fmt.Errorf("key action: %w", err)
 			}
 		case "split-pane":
@@ -308,8 +316,87 @@ func tmuxKey(key string) string {
 	switch normalized {
 	case "enter", "return":
 		return "Enter"
+	case "escape", "esc":
+		return "Escape"
+	case "tab":
+		return "Tab"
+	case "space":
+		return "Space"
+	case "backspace", "bspace", "bs":
+		return "BSpace"
 	default:
 		return key
+	}
+}
+
+func resolveActionTarget(targetSession string, paneSelector string) (string, error) {
+	selector := strings.TrimSpace(paneSelector)
+	if selector == "" {
+		return targetSession, nil
+	}
+
+	panes, err := listSessionPanes(targetSession)
+	if err != nil {
+		return "", err
+	}
+	targetPane, ok := selectPaneBySelector(panes, selector)
+	if !ok {
+		return "", fmt.Errorf("pane selector %q not found", selector)
+	}
+	return targetPane, nil
+}
+
+func selectPaneBySelector(panes []paneState, selector string) (string, bool) {
+	if len(panes) == 0 {
+		return "", false
+	}
+
+	trimmed := strings.TrimSpace(selector)
+	if trimmed == "" {
+		return "", false
+	}
+
+	for _, pane := range panes {
+		if pane.ID == trimmed {
+			return pane.ID, true
+		}
+	}
+
+	if idx, err := strconv.Atoi(trimmed); err == nil {
+		for _, pane := range panes {
+			if pane.Index == idx {
+				return pane.ID, true
+			}
+		}
+		return "", false
+	}
+
+	switch strings.ToLower(trimmed) {
+	case "active":
+		for _, pane := range panes {
+			if pane.Active {
+				return pane.ID, true
+			}
+		}
+		return "", false
+	case "last", "newest", "right":
+		selected := panes[0]
+		for _, pane := range panes[1:] {
+			if pane.Index > selected.Index {
+				selected = pane
+			}
+		}
+		return selected.ID, true
+	case "first", "left":
+		selected := panes[0]
+		for _, pane := range panes[1:] {
+			if pane.Index < selected.Index {
+				selected = pane
+			}
+		}
+		return selected.ID, true
+	default:
+		return "", false
 	}
 }
 
@@ -319,13 +406,18 @@ type keyMacroPlaybackStep struct {
 }
 
 func keyMacroAction(targetSession string, action transcript.Action) error {
+	targetPane, err := resolveActionTarget(targetSession, action.Pane)
+	if err != nil {
+		return fmt.Errorf("key-macro action: %w", err)
+	}
+
 	playback, err := keyMacroPlayback(action)
 	if err != nil {
 		return fmt.Errorf("key-macro action: %w", err)
 	}
 
 	for i, step := range playback {
-		if err := runTmux("send-keys", "-t", targetSession, tmuxKey(step.Key)); err != nil {
+		if err := runTmux("send-keys", "-t", targetPane, tmuxKey(step.Key)); err != nil {
 			return fmt.Errorf("key-macro action (step %d): %w", i, err)
 		}
 		if step.DelayAfter > 0 && i+1 < len(playback) {

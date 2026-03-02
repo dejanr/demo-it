@@ -203,6 +203,7 @@ func TestParseStepsMarkdownParsesKeyMacro(t *testing.T) {
 title: macro
 actions:
   - kind: key-macro
+    pane: last
     interval_ms: 90
     keys:
       - key: i
@@ -219,6 +220,9 @@ actions:
 	action := steps[0].Actions[0]
 	if action.Kind != "key-macro" {
 		t.Fatalf("unexpected kind: %q", action.Kind)
+	}
+	if action.Pane != "last" {
+		t.Fatalf("pane = %q, want last", action.Pane)
 	}
 	if action.IntervalMS == nil || *action.IntervalMS != 90 {
 		t.Fatalf("interval_ms = %#v, want 90", action.IntervalMS)
