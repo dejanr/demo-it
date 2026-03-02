@@ -19,6 +19,39 @@ import (
 	"github.com/dejanr/demo-it/internal/transcript"
 )
 
+var debugLogFile *os.File
+
+func initDebugLog() error {
+	path := strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))
+	if path == "" {
+		return nil
+	}
+
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open debug log %q: %w", path, err)
+	}
+	debugLogFile = file
+	debugf("debug enabled pid=%d argv=%q", os.Getpid(), os.Args)
+	return nil
+}
+
+func closeDebugLog() {
+	if debugLogFile == nil {
+		return
+	}
+	_ = debugLogFile.Close()
+	debugLogFile = nil
+}
+
+func debugf(format string, args ...interface{}) {
+	if debugLogFile == nil {
+		return
+	}
+	line := fmt.Sprintf(format, args...)
+	_, _ = fmt.Fprintf(debugLogFile, "%s %s\n", time.Now().Format(time.RFC3339Nano), line)
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -27,6 +60,12 @@ func main() {
 }
 
 func run() error {
+	if err := initDebugLog(); err != nil {
+		return err
+	}
+	defer closeDebugLog()
+	debugf("run start")
+
 	repoRoot, err := runctx.RepoRoot()
 	if err != nil {
 		return err
@@ -38,12 +77,14 @@ func run() error {
 	runID := flag.String("run-id", defaultRunID, "run identifier")
 	socketPath := flag.String("socket", defaultSocketPath, "daemon unix socket path")
 	flag.Parse()
+	debugf("parsed flags run_id=%q socket=%q args=%q", *runID, *socketPath, flag.Args())
 
 	if flag.NArg() == 0 {
 		return usageError()
 	}
 
 	target := flag.Arg(0)
+	debugf("dispatch target=%q", target)
 	switch target {
 	case "list":
 		return listSessionsCommand()
@@ -246,6 +287,7 @@ func createSession(name string, cwd string) error {
 
 func executeBootstrapStep(workspacePath string, demoSession string, requireTranscript bool) ([]transcript.Step, int, error) {
 	stepsPath := filepath.Join(workspacePath, "demo-it.md")
+	debugf("bootstrap parse steps path=%q", stepsPath)
 	steps, err := transcript.ParseStepsFile(stepsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -257,8 +299,10 @@ func executeBootstrapStep(workspacePath string, demoSession string, requireTrans
 		return nil, -1, fmt.Errorf("parse %s: %w", stepsPath, err)
 	}
 	if len(steps) == 0 {
+		debugf("bootstrap parsed 0 steps")
 		return steps, -1, nil
 	}
+	debugf("bootstrap parsed steps=%d first_title=%q", len(steps), steps[0].Title)
 	if err := runActions(demoSession, steps[0].Actions); err != nil {
 		return nil, -1, err
 	}
@@ -266,7 +310,8 @@ func executeBootstrapStep(workspacePath string, demoSession string, requireTrans
 }
 
 func runActions(targetSession string, actions []transcript.Action) error {
-	for _, action := range actions {
+	for idx, action := range actions {
+		debugf("action start session=%q index=%d kind=%q pane=%q", targetSession, idx, action.Kind, action.Pane)
 		switch action.Kind {
 		case "insert-text":
 			targetPane, err := resolveActionTarget(targetSession, action.Pane)
@@ -307,6 +352,7 @@ func runActions(targetSession string, actions []transcript.Action) error {
 		default:
 			return fmt.Errorf("unsupported action kind: %s", action.Kind)
 		}
+		debugf("action done session=%q index=%d kind=%q", targetSession, idx, action.Kind)
 	}
 	return nil
 }
@@ -332,6 +378,7 @@ func tmuxKey(key string) string {
 func resolveActionTarget(targetSession string, paneSelector string) (string, error) {
 	selector := strings.TrimSpace(paneSelector)
 	if selector == "" {
+		debugf("resolve action target session=%q selector=default -> %q", targetSession, targetSession)
 		return targetSession, nil
 	}
 
@@ -341,8 +388,10 @@ func resolveActionTarget(targetSession string, paneSelector string) (string, err
 	}
 	targetPane, ok := selectPaneBySelector(panes, selector)
 	if !ok {
+		debugf("resolve action target session=%q selector=%q failed panes=%v", targetSession, selector, panes)
 		return "", fmt.Errorf("pane selector %q not found", selector)
 	}
+	debugf("resolve action target session=%q selector=%q -> %q", targetSession, selector, targetPane)
 	return targetPane, nil
 }
 
@@ -415,9 +464,12 @@ func keyMacroAction(targetSession string, action transcript.Action) error {
 	if err != nil {
 		return fmt.Errorf("key-macro action: %w", err)
 	}
+	debugf("key-macro target=%q steps=%d", targetPane, len(playback))
 
 	for i, step := range playback {
-		if err := runTmux("send-keys", "-t", targetPane, tmuxKey(step.Key)); err != nil {
+		key := tmuxKey(step.Key)
+		debugf("key-macro step=%d key=%q delay_after=%s", i, key, step.DelayAfter)
+		if err := runTmux("send-keys", "-t", targetPane, key); err != nil {
 			return fmt.Errorf("key-macro action (step %d): %w", i, err)
 		}
 		if step.DelayAfter > 0 && i+1 < len(playback) {
@@ -868,6 +920,7 @@ type workspaceStepTransition struct {
 }
 
 func advanceWorkspaceStepForCommand(command string) (workspaceStepTransition, error) {
+	debugf("advance workspace command=%q", command)
 	sessions, err := listManagedSessionDetails()
 	if err != nil {
 		return workspaceStepTransition{}, err
@@ -875,8 +928,10 @@ func advanceWorkspaceStepForCommand(command string) (workspaceStepTransition, er
 
 	demoSession, notesSession, ok := selectWorkspaceSessions(sessions)
 	if !ok {
+		debugf("advance workspace no managed sessions")
 		return workspaceStepTransition{}, nil
 	}
+	debugf("advance workspace selected demo=%q notes_present=%v step=%d", demoSession.Name, notesSession != nil, demoSession.Step)
 
 	stepsPath := filepath.Join(demoSession.Workspace, "demo-it.md")
 	steps, err := transcript.ParseStepsFile(stepsPath)
@@ -1352,8 +1407,16 @@ func tmuxSessionExists(name string) (bool, error) {
 
 func runTmux(args ...string) error {
 	cmd := exec.Command("tmux", args...)
-	if err := cmd.Run(); err != nil {
-		return err
+	output, err := cmd.CombinedOutput()
+	trimmed := strings.TrimSpace(string(output))
+	if err != nil {
+		debugf("tmux cmd=%v err=%v output=%q", args, err, trimmed)
+		return fmt.Errorf("tmux %v: %w: %s", args, err, trimmed)
+	}
+	if trimmed != "" {
+		debugf("tmux cmd=%v output=%q", args, trimmed)
+	} else {
+		debugf("tmux cmd=%v ok", args)
 	}
 	return nil
 }
@@ -1361,18 +1424,27 @@ func runTmux(args ...string) error {
 func runTmuxOutput(args ...string) (string, error) {
 	cmd := exec.Command("tmux", args...)
 	output, err := cmd.CombinedOutput()
+	trimmed := strings.TrimSpace(string(output))
 	if err != nil {
-		return "", fmt.Errorf("tmux %v: %w: %s", args, err, strings.TrimSpace(string(output)))
+		debugf("tmux output cmd=%v err=%v output=%q", args, err, trimmed)
+		return "", fmt.Errorf("tmux %v: %w: %s", args, err, trimmed)
+	}
+	if trimmed != "" {
+		debugf("tmux output cmd=%v output=%q", args, trimmed)
+	} else {
+		debugf("tmux output cmd=%v ok", args)
 	}
 	return string(output), nil
 }
 
 func runTmuxWithStdio(args ...string) error {
+	debugf("tmux stdio cmd=%v", args)
 	cmd := exec.Command("tmux", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
+		debugf("tmux stdio cmd=%v err=%v", args, err)
 		return fmt.Errorf("tmux %v: %w", args, err)
 	}
 	return nil
