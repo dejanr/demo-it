@@ -21,7 +21,7 @@ actions:
       - key: l
       - key: l
       - key: o
-      - key: -
+      - key: "-"
       - key: d
       - key: e
       - key: m
