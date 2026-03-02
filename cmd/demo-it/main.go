@@ -240,6 +240,12 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string, require
 	if err := setSessionMetadata(notesSession, workspacePath, "notes", currentStep); err != nil {
 		return err
 	}
+	if err := setSessionRuntimeContext(demoSession, runID, socketPath); err != nil {
+		return err
+	}
+	if err := setSessionRuntimeContext(notesSession, runID, socketPath); err != nil {
+		return err
+	}
 
 	if err := refreshNotesSession(notesSession, workspacePath, steps, currentStep); err != nil {
 		return err
@@ -248,7 +254,7 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string, require
 	if err := ensureRunStarted(runID, socketPath); err != nil {
 		return err
 	}
-	if err := ensureDemoNavigationBindings(); err != nil {
+	if err := ensureDemoNavigationBindings(runID, socketPath, strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))); err != nil {
 		return err
 	}
 
@@ -784,6 +790,11 @@ func selectPaneToKeep(panes []paneState) string {
 	return keep.ID
 }
 
+func shellQuote(value string) string {
+	escaped := strings.ReplaceAll(value, "'", "'\"'\"'")
+	return "'" + escaped + "'"
+}
+
 func ensureRunStarted(runID string, socketPath string) error {
 	req := protocol.Request{
 		ID:      fmt.Sprintf("cli-%d", time.Now().UnixNano()),
@@ -838,7 +849,21 @@ func setSessionMetadata(name string, workspace string, role string, step int) er
 	return nil
 }
 
-func ensureDemoNavigationBindings() error {
+func setSessionRuntimeContext(name string, runID string, socketPath string) error {
+	if err := runTmux("set-option", "-t", name, "-q", "@demo_it_run_id", runID); err != nil {
+		return fmt.Errorf("set run_id metadata for %q: %w", name, err)
+	}
+	if err := runTmux("set-option", "-t", name, "-q", "@demo_it_socket", socketPath); err != nil {
+		return fmt.Errorf("set socket metadata for %q: %w", name, err)
+	}
+	debugLogPath := strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))
+	if err := runTmux("set-option", "-t", name, "-q", "@demo_it_debug_log", debugLogPath); err != nil {
+		return fmt.Errorf("set debug log metadata for %q: %w", name, err)
+	}
+	return nil
+}
+
+func ensureDemoNavigationBindings(runID string, socketPath string, debugLogPath string) error {
 	if err := runTmux(
 		"bind-key", "-T", "root", "C-s",
 		"if-shell", "-F", "#{==:#{@demo_it},1}",
@@ -848,17 +873,29 @@ func ensureDemoNavigationBindings() error {
 		return fmt.Errorf("bind demo-it prefix key: %w", err)
 	}
 
+	nextCommand := fmt.Sprintf(
+		"DEMO_IT_DEBUG_LOG=%s demo-it --run-id %s --socket %s next >/dev/null 2>&1",
+		shellQuote(debugLogPath),
+		shellQuote(runID),
+		shellQuote(socketPath),
+	)
 	if err := runTmux(
 		"bind-key", "-T", "demo-it-nav", "n",
-		"run-shell", "-b", "demo-it next >/dev/null 2>&1",
+		"run-shell", "-b", nextCommand,
 		"\\;", "switch-client", "-T", "root",
 	); err != nil {
 		return fmt.Errorf("bind demo-it next key: %w", err)
 	}
 
+	prevCommand := fmt.Sprintf(
+		"DEMO_IT_DEBUG_LOG=%s demo-it --run-id %s --socket %s prev >/dev/null 2>&1",
+		shellQuote(debugLogPath),
+		shellQuote(runID),
+		shellQuote(socketPath),
+	)
 	if err := runTmux(
 		"bind-key", "-T", "demo-it-nav", "p",
-		"run-shell", "-b", "demo-it prev >/dev/null 2>&1",
+		"run-shell", "-b", prevCommand,
 		"\\;", "switch-client", "-T", "root",
 	); err != nil {
 		return fmt.Errorf("bind demo-it prev key: %w", err)
