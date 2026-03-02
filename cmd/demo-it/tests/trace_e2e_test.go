@@ -151,6 +151,16 @@ func newE2EHarness(t *testing.T) *e2eHarness {
 
 func (h *e2eHarness) createManagedDemoSession(t *testing.T, sessionName string, workspace string, shellCommand string, step int) {
 	t.Helper()
+	h.createManagedSessionWithRole(t, sessionName, workspace, shellCommand, "demo", step)
+}
+
+func (h *e2eHarness) createManagedNotesSession(t *testing.T, sessionName string, workspace string, shellCommand string, step int) {
+	t.Helper()
+	h.createManagedSessionWithRole(t, sessionName, workspace, shellCommand, "notes", step)
+}
+
+func (h *e2eHarness) createManagedSessionWithRole(t *testing.T, sessionName string, workspace string, shellCommand string, role string, step int) {
+	t.Helper()
 
 	args := []string{"new-session", "-d", "-s", sessionName, "-c", workspace}
 	if strings.TrimSpace(shellCommand) != "" {
@@ -159,7 +169,7 @@ func (h *e2eHarness) createManagedDemoSession(t *testing.T, sessionName string, 
 	h.mustRunTmux(t, args...)
 	h.mustRunTmux(t, "set-option", "-t", sessionName, "-q", "@demo_it", "1")
 	h.mustRunTmux(t, "set-option", "-t", sessionName, "-q", "@demo_it_workspace", workspace)
-	h.mustRunTmux(t, "set-option", "-t", sessionName, "-q", "@demo_it_role", "demo")
+	h.mustRunTmux(t, "set-option", "-t", sessionName, "-q", "@demo_it_role", role)
 	h.mustRunTmux(t, "set-option", "-t", sessionName, "-q", "@demo_it_step", strconv.Itoa(step))
 }
 

@@ -635,6 +635,16 @@ func TestStateSupportsCapabilityHandlesMissingShape(t *testing.T) {
 	}
 }
 
+func TestNotesPaneCommand(t *testing.T) {
+	command := notesPaneCommand("hello notes")
+	if !strings.Contains(command, "base64 -d") {
+		t.Fatalf("expected base64 decode pipeline, got %q", command)
+	}
+	if !strings.Contains(command, "[demo-it-notes]") {
+		t.Fatalf("expected notes buffer name, got %q", command)
+	}
+}
+
 func TestExecuteBootstrapStepRequiresTranscriptWhenRequested(t *testing.T) {
 	workspace := t.TempDir()
 	_, _, err := executeBootstrapStep(workspace, "demo-session", true)

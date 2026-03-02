@@ -24,6 +24,7 @@ type autoNextExecutor func(runID string, args protocol.SetAutoNextArgs) error
 type Service struct {
 	mu               sync.Mutex
 	runs             map[string]*session.RunState
+	notes            map[string]string
 	autoNextTasks    map[string]autoNextTask
 	autoNextCounters map[string]uint64
 	executeAutoNext  autoNextExecutor
@@ -35,6 +36,7 @@ type StateView struct {
 	CurrentSlide       int               `json:"current_slide"`
 	TranscriptRevision string            `json:"transcript_revision,omitempty"`
 	Capabilities       []string          `json:"capabilities,omitempty"`
+	SpeakerNotes       string            `json:"speaker_notes,omitempty"`
 	LastEvent          string            `json:"last_event,omitempty"`
 	InteractionID      string            `json:"interaction_id,omitempty"`
 	Skipped            bool              `json:"skipped,omitempty"`
@@ -51,6 +53,7 @@ func newServiceWithAutoNextExecutor(executor autoNextExecutor) *Service {
 	}
 	return &Service{
 		runs:             map[string]*session.RunState{},
+		notes:            map[string]string{},
 		autoNextTasks:    map[string]autoNextTask{},
 		autoNextCounters: map[string]uint64{},
 		executeAutoNext:  executor,
@@ -68,20 +71,20 @@ func (s *Service) Handle(req protocol.Request) protocol.Response {
 	switch req.Command {
 	case protocol.CommandStart:
 		run := s.ensureRun(req.RunID)
-		return okResponse(req.ID, stateView(*run, session.TransitionResult{}))
+		return okResponse(req.ID, s.stateView(*run, session.TransitionResult{}))
 	case protocol.CommandStatus:
 		run, ok := s.runs[req.RunID]
 		if !ok {
 			return notFoundResponse(req.ID, req.RunID)
 		}
-		return okResponse(req.ID, stateView(*run, session.TransitionResult{}))
+		return okResponse(req.ID, s.stateView(*run, session.TransitionResult{}))
 	case protocol.CommandReload:
 		run, ok := s.runs[req.RunID]
 		if !ok {
 			return notFoundResponse(req.ID, req.RunID)
 		}
 		result := run.Reload(run.Slides, run.TranscriptRevision)
-		return okResponse(req.ID, stateView(*run, result))
+		return okResponse(req.ID, s.stateView(*run, result))
 	case protocol.CommandNext:
 		run, ok := s.runs[req.RunID]
 		if !ok {
@@ -92,7 +95,7 @@ func (s *Service) Handle(req protocol.Request) protocol.Response {
 		if err != nil && !errors.Is(err, session.ErrNoFurtherTransition) {
 			return errorResponse(req.ID, err)
 		}
-		return okResponse(req.ID, stateView(*run, result))
+		return okResponse(req.ID, s.stateView(*run, result))
 	case protocol.CommandPrev:
 		run, ok := s.runs[req.RunID]
 		if !ok {
@@ -102,7 +105,7 @@ func (s *Service) Handle(req protocol.Request) protocol.Response {
 		if err != nil {
 			return errorResponse(req.ID, err)
 		}
-		return okResponse(req.ID, stateView(*run, result))
+		return okResponse(req.ID, s.stateView(*run, result))
 	case protocol.CommandRerun:
 		run, ok := s.runs[req.RunID]
 		if !ok {
@@ -112,7 +115,7 @@ func (s *Service) Handle(req protocol.Request) protocol.Response {
 		if err != nil {
 			return errorResponse(req.ID, err)
 		}
-		return okResponse(req.ID, stateView(*run, result))
+		return okResponse(req.ID, s.stateView(*run, result))
 	case protocol.CommandJump:
 		run, ok := s.runs[req.RunID]
 		if !ok {
@@ -133,7 +136,7 @@ func (s *Service) Handle(req protocol.Request) protocol.Response {
 		if err != nil {
 			return errorResponse(req.ID, err)
 		}
-		return okResponse(req.ID, stateView(*run, result))
+		return okResponse(req.ID, s.stateView(*run, result))
 	case protocol.CommandSetFocusPolicy:
 		run, ok := s.runs[req.RunID]
 		if !ok {
@@ -146,7 +149,7 @@ func (s *Service) Handle(req protocol.Request) protocol.Response {
 		if err := run.SetDefaultFocusPolicy(args.Focus); err != nil {
 			return errorResponse(req.ID, err)
 		}
-		return okResponse(req.ID, stateView(*run, session.TransitionResult{Event: "set_focus_policy"}))
+		return okResponse(req.ID, s.stateView(*run, session.TransitionResult{Event: "set_focus_policy"}))
 	case protocol.CommandSetAutoNext:
 		run, ok := s.runs[req.RunID]
 		if !ok {
@@ -163,7 +166,18 @@ func (s *Service) Handle(req protocol.Request) protocol.Response {
 		if args.Enabled {
 			event = "auto_next_set"
 		}
-		return okResponse(req.ID, stateView(*run, session.TransitionResult{Event: event}))
+		return okResponse(req.ID, s.stateView(*run, session.TransitionResult{Event: event}))
+	case protocol.CommandSetNotes:
+		run, ok := s.runs[req.RunID]
+		if !ok {
+			return notFoundResponse(req.ID, req.RunID)
+		}
+		var args protocol.SetNotesArgs
+		if err := decodeArgs(req.Args, &args); err != nil {
+			return errorResponse(req.ID, fmt.Errorf("%w: %v", protocol.ErrInvalidRequest, err))
+		}
+		s.notes[req.RunID] = args.Text
+		return okResponse(req.ID, s.stateView(*run, session.TransitionResult{Event: "set_notes"}))
 	default:
 		return errorResponse(req.ID, fmt.Errorf("%w: unsupported cmd %q", protocol.ErrInvalidCommand, req.Command))
 	}
@@ -298,7 +312,7 @@ func slideIndex(slides []session.Slide, args protocol.JumpArgs) (int, error) {
 	return 0, fmt.Errorf("slide not found: %s", args.SlideID)
 }
 
-func stateView(run session.RunState, transition session.TransitionResult) StateView {
+func (s *Service) stateView(run session.RunState, transition session.TransitionResult) StateView {
 	return StateView{
 		RunID:              run.RunID,
 		Status:             run.Status,
@@ -306,10 +320,12 @@ func stateView(run session.RunState, transition session.TransitionResult) StateV
 		TranscriptRevision: run.TranscriptRevision,
 		Capabilities: []string{
 			protocol.CapabilitySetAutoNext,
+			protocol.CapabilitySetNotes,
 			protocol.CapabilitySplitPanes,
 			protocol.CapabilityKillPanes,
 			protocol.CapabilityKeyMacro,
 		},
+		SpeakerNotes:  s.notes[run.RunID],
 		LastEvent:     transition.Event,
 		InteractionID: transition.InteractionID,
 		Skipped:       transition.Skipped,

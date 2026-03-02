@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -266,7 +267,11 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string, require
 		return err
 	}
 
-	if err := refreshNotesSession(notesSession, workspacePath, steps, currentStep); err != nil {
+	notesText := renderSpeakerNotes(steps, currentStep)
+	if err := syncNotesWithDaemon(notesText, runID, socketPath); err != nil {
+		return err
+	}
+	if err := refreshNotesSession(notesSession, workspacePath, notesText); err != nil {
 		return err
 	}
 
@@ -946,15 +951,8 @@ func ensureDemoNavigationBindings(cliPath string, debugLogPath string) error {
 	return nil
 }
 
-func refreshNotesSession(notesSession string, workspacePath string, steps []transcript.Step, stepIndex int) error {
-	notesPath := filepath.Join(workspacePath, ".demo-it", "notes.md")
-	if err := os.MkdirAll(filepath.Dir(notesPath), 0o755); err != nil {
-		return fmt.Errorf("create notes directory: %w", err)
-	}
-	if err := os.WriteFile(notesPath, []byte(renderSpeakerNotes(steps, stepIndex)), 0o644); err != nil {
-		return fmt.Errorf("write notes file: %w", err)
-	}
-	if err := runTmux("respawn-pane", "-k", "-t", notesSession, "-c", workspacePath, "nvim", "+silent! DemoItPresentationEnable", notesPath); err != nil {
+func refreshNotesSession(notesSession string, workspacePath string, notesText string) error {
+	if err := runTmux("respawn-pane", "-k", "-t", notesSession, "-c", workspacePath, "sh", "-lc", notesPaneCommand(notesText)); err != nil {
 		return fmt.Errorf("refresh notes session %q: %w", notesSession, err)
 	}
 	return nil
@@ -981,6 +979,14 @@ func renderSpeakerNotes(steps []transcript.Step, stepIndex int) string {
 		return notes + "\n\n---\nNext: " + steps[stepIndex+1].Title + "\n"
 	}
 	return notes + "\n"
+}
+
+func notesPaneCommand(notesText string) string {
+	payload := base64.StdEncoding.EncodeToString([]byte(notesText))
+	return fmt.Sprintf(
+		"printf '%%s' %s | base64 -d | nvim - '+setlocal buftype=nofile bufhidden=hide noswapfile nobuflisted' '+silent keepalt file [demo-it-notes]' '+silent! DemoItPresentationEnable'",
+		shellQuote(payload),
+	)
 }
 
 type workspaceStepTransition struct {
@@ -1044,6 +1050,10 @@ func advanceWorkspaceStepForCommand(command string, runID string, socketPath str
 		if err := syncAutoNextWithDaemon(steps, demoSession.Step, runID, socketPath); err != nil {
 			return workspaceStepTransition{}, err
 		}
+		notesText := renderSpeakerNotes(steps, demoSession.Step)
+		if err := syncNotesWithDaemon(notesText, runID, socketPath); err != nil {
+			return workspaceStepTransition{}, err
+		}
 		transition.StepIndex = demoSession.Step
 		transition.StepTitle = stepTitleAt(steps, demoSession.Step)
 		transition.ActionsExecuted = true
@@ -1063,11 +1073,15 @@ func advanceWorkspaceStepForCommand(command string, runID string, socketPath str
 	if err := setSessionMetadata(demoSession.Name, demoSession.Workspace, "demo", nextStep); err != nil {
 		return workspaceStepTransition{}, err
 	}
+	notesText := renderSpeakerNotes(steps, nextStep)
+	if err := syncNotesWithDaemon(notesText, runID, socketPath); err != nil {
+		return workspaceStepTransition{}, err
+	}
 	if notesSession != nil {
 		if err := setSessionMetadata(notesSession.Name, demoSession.Workspace, "notes", nextStep); err != nil {
 			return workspaceStepTransition{}, err
 		}
-		if err := refreshNotesSession(notesSession.Name, demoSession.Workspace, steps, nextStep); err != nil {
+		if err := refreshNotesSession(notesSession.Name, demoSession.Workspace, notesText); err != nil {
 			return workspaceStepTransition{}, err
 		}
 	}
@@ -1099,6 +1113,38 @@ func stepTitleAt(steps []transcript.Step, index int) string {
 		return ""
 	}
 	return strings.TrimSpace(steps[index].Title)
+}
+
+func syncNotesWithDaemon(notesText string, runID string, socketPath string) error {
+	supported, err := daemonSupportsCapability(runID, socketPath, protocol.CapabilitySetNotes)
+	if err != nil {
+		return err
+	}
+	if !supported {
+		return fmt.Errorf("connected daemon does not support %q; restart demo-itd with a newer build", protocol.CapabilitySetNotes)
+	}
+	raw, err := json.Marshal(protocol.SetNotesArgs{Text: notesText})
+	if err != nil {
+		return fmt.Errorf("encode set_notes args: %w", err)
+	}
+	req := protocol.Request{
+		ID:      fmt.Sprintf("cli-set-notes-%d", time.Now().UnixNano()),
+		Command: protocol.CommandSetNotes,
+		RunID:   runID,
+		Args:    raw,
+	}
+	c := client.SocketClient{SocketPath: socketPath}
+	resp, err := c.Send(req)
+	if err != nil {
+		return fmt.Errorf("set notes via daemon: %w", err)
+	}
+	if !resp.OK {
+		if resp.Error == nil {
+			return errors.New("daemon returned unknown error for set_notes")
+		}
+		return fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
+	}
+	return nil
 }
 
 func syncAutoNextWithDaemon(steps []transcript.Step, stepIndex int, runID string, socketPath string) error {

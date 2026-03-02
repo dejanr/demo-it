@@ -32,6 +32,9 @@ func TestHandleStartCreatesRunAndStatusReturnsState(t *testing.T) {
 	if !containsCapability(state.Capabilities, protocol.CapabilitySetAutoNext) {
 		t.Fatalf("missing capability %q in %#v", protocol.CapabilitySetAutoNext, state.Capabilities)
 	}
+	if !containsCapability(state.Capabilities, protocol.CapabilitySetNotes) {
+		t.Fatalf("missing capability %q in %#v", protocol.CapabilitySetNotes, state.Capabilities)
+	}
 	if !containsCapability(state.Capabilities, protocol.CapabilitySplitPanes) {
 		t.Fatalf("missing capability %q in %#v", protocol.CapabilitySplitPanes, state.Capabilities)
 	}
@@ -174,6 +177,25 @@ func TestHandleSetAutoNextCancelStopsPendingTimer(t *testing.T) {
 	defer mu.Unlock()
 	if count != 0 {
 		t.Fatalf("expected no executor calls, got %d", count)
+	}
+}
+
+func TestHandleSetNotesStoresSpeakerNotesInState(t *testing.T) {
+	svc := NewService()
+	_ = svc.Handle(protocol.Request{ID: "1", Command: protocol.CommandStart, RunID: "demo-it-test"})
+
+	args, err := json.Marshal(protocol.SetNotesArgs{Text: "hello notes"})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	resp := svc.Handle(protocol.Request{ID: "2", Command: protocol.CommandSetNotes, RunID: "demo-it-test", Args: args})
+	if !resp.OK {
+		t.Fatalf("expected set_notes OK, got %#v", resp.Error)
+	}
+
+	state := decodeState(t, resp.State)
+	if state.SpeakerNotes != "hello notes" {
+		t.Fatalf("speaker_notes = %q, want %q", state.SpeakerNotes, "hello notes")
 	}
 }
 

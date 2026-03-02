@@ -18,10 +18,12 @@ const (
 	CommandJump           Command = "jump"
 	CommandSetFocusPolicy Command = "set_focus_policy"
 	CommandSetAutoNext    Command = "set_auto_next"
+	CommandSetNotes       Command = "set_notes"
 )
 
 const (
 	CapabilitySetAutoNext = "set_auto_next"
+	CapabilitySetNotes    = "set_notes"
 	CapabilitySplitPanes  = "split_panes"
 	CapabilityKillPanes   = "kill_panes"
 	CapabilityKeyMacro    = "key_macro"
@@ -72,6 +74,10 @@ type SetAutoNextArgs struct {
 	SocketPath   string   `json:"socket_path,omitempty"`
 	DebugLogPath string   `json:"debug_log_path,omitempty"`
 	Env          []string `json:"env,omitempty"`
+}
+
+type SetNotesArgs struct {
+	Text string `json:"text"`
 }
 
 var (
@@ -130,6 +136,12 @@ func (r Request) Validate() error {
 		}
 		if args.SocketPath == "" {
 			return fmt.Errorf("%w: set_auto_next requires socket_path", ErrInvalidRequest)
+		}
+		return nil
+	case CommandSetNotes:
+		var args SetNotesArgs
+		if err := decodeArgs(r.Args, &args); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 		}
 		return nil
 	default:

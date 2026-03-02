@@ -106,3 +106,19 @@ func TestRequestValidateRejectsSetAutoNextMissingFields(t *testing.T) {
 		t.Fatal("expected validation error")
 	}
 }
+
+func TestRequestValidateSetNotes(t *testing.T) {
+	args, err := json.Marshal(SetNotesArgs{Text: "hello"})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	req := Request{
+		ID:      "req-1",
+		Command: CommandSetNotes,
+		RunID:   "demo-it-test",
+		Args:    args,
+	}
+	if err := req.Validate(); err != nil {
+		t.Fatalf("expected valid set_notes request, got %v", err)
+	}
+}

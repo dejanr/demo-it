@@ -80,10 +80,13 @@ Notes:
   - configure daemon-owned delayed auto-advance for a run
   - `enabled: false` clears any pending timer for the run
   - `enabled: true` schedules one-shot `next` execution after `delay_ms`
+- `set_notes`
+  - store current rendered speaker notes in daemon memory for the active run
 
 Capability names currently advertised by daemon state:
 
 - `set_auto_next`
+- `set_notes`
 - `split_panes`
 - `kill_panes`
 - `key_macro`
@@ -122,6 +125,16 @@ No command-specific arguments currently used.
 - `env` is optional and used by the daemon executor when spawning delayed `next`.
 - when `enabled` is `false`, pending auto-next timer is cleared.
 
+### `set_notes`
+
+```json
+{
+  "text": "Current speaker notes for active step..."
+}
+```
+
+- stores notes text in daemon memory for the run.
+
 ## State fields returned today
 
 `state` currently exposes:
@@ -132,6 +145,8 @@ No command-specific arguments currently used.
 - `transcript_revision` (when present)
 - daemon capability metadata:
   - `capabilities` (e.g. `set_auto_next`)
+- notes metadata:
+  - `speaker_notes`
 - transition metadata:
   - `last_event`
   - `interaction_id`
