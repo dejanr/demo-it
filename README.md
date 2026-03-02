@@ -81,7 +81,8 @@ Use `start` to reset/create deterministic tmux sessions:
 
 ```bash
 demo-it start              # bootstrap from current working directory
-demo-it start ./examples/demo
+demo-it start ./examples/tmux-splits
+demo-it start ./examples/no-slides
 ```
 
 Path mode is still supported and is equivalent to `demo-it start <workspace-path>`:
@@ -95,7 +96,7 @@ For `examples/tmux-splits`, this creates:
 - `tmux-splits-demo`
 - `tmux-splits-notes`
 
-It opens/switches to `tmux-splits-demo`; open `tmux-splits-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately. In single-workspace mode, `demo-it start` first kills previously managed demo-it tmux sessions, then creates the new workspace sessions. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing.
+It opens/switches to `tmux-splits-demo`; open `tmux-splits-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it status` and `demo-it next` are available immediately. In single-workspace mode, `demo-it start` first kills previously managed demo-it tmux sessions, then creates the new workspace sessions. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing. Slide assets are optional: action-only transcripts (for shell demos) also work, see `examples/no-slides`.
 
 When `demo-it` opens slides in Neovim panes, it now also runs `:DemoItPresentationEnable` (silently when available) so presentation-friendly UI defaults are applied automatically. Demo tmux sessions also start with `status off` for a cleaner stage view.
 
@@ -149,7 +150,7 @@ bind -N "demo-it next" Space run-shell -b 'out=$("${DEMO_IT_PATH:-demo-it}" next
 bind -N "demo-it prev" BSpace run-shell -b 'out=$("${DEMO_IT_PATH:-demo-it}" prev 2>&1); code=$?; [ "$code" -eq 0 ] || tmux display-message "demo-it prev failed: $(printf "%s" "$out" | tr "\n" " ")"'
 ```
 
-If `demo-it.md` contains `demo-it` fenced blocks, bootstrap runs the first block immediately. Steps with `slide: ...` (or `open-slide`) auto-start Neovim in the demo pane and open that slide, so `insert-text: nvim`/`key:return` is no longer required. `speaker_notes` are intended as post-action guidance before moving to the next block, and are rendered in `demo-notes` (Neovim) and refreshed as `demo-it next`/`demo-it prev` move through steps for the latest workspace. Use `killall-pane` to kill all extra panes and keep only the initial pane (lowest pane index). Use `split-pane` (right) or `split-pane-vertical` (down) for tmux layout changes while keeping the presenter pane focused; use `kill-pane` to close the latest pane (highest pane index) in the target session; use `key-macro` for timed key playback (`interval_ms` + per-key `delay_ms`) with optional pane targeting (`pane: active|last|left|right|<index>|<pane-id>`); and use slide shorthands (`slide: ...`, `open-slide`, or `key` with `slide`) to open markdown files in a Neovim pane of the demo session.
+If `demo-it.md` contains `demo-it` fenced blocks, bootstrap runs the first block immediately. Slides are optional: blocks can be pure tmux/shell actions, or they can use `slide: ...` / `open-slide` (which auto-start Neovim in the demo pane and open that slide, so `insert-text: nvim`/`key:return` is no longer required). `speaker_notes` are intended as post-action guidance before moving to the next block, and are rendered in `demo-notes` (Neovim) and refreshed as `demo-it next`/`demo-it prev` move through steps for the latest workspace. Use `killall-pane` to kill all extra panes and keep only the initial pane (lowest pane index). Use `split-pane` (right) or `split-pane-vertical` (down) for tmux layout changes while keeping the presenter pane focused; use `kill-pane` to close the latest pane (highest pane index) in the target session; use `key-macro` for timed key playback (`interval_ms` + per-key `delay_ms`) with optional pane targeting (`pane: active|last|left|right|<index>|<pane-id>`); and use slide shorthands (`slide: ...`, `open-slide`, or `key` with `slide`) to open markdown files in a Neovim pane of the demo session.
 
 Example `key-macro` action:
 

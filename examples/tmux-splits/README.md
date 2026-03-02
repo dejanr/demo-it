@@ -1,16 +1,16 @@
-# demo-it example workspace
+# tmux-splits example workspace
 
 Use this folder to test tmux bootstrap mode:
 
 ```bash
-demo-it ./examples/demo
+demo-it ./examples/tmux-splits
 ```
 
 This resets and creates:
-- `demo-demo`
-- `demo-notes`
+- `tmux-splits-demo`
+- `tmux-splits-notes`
 
-It opens/switches to `demo-demo`.
+It opens/switches to `tmux-splits-demo`.
 
 `demo-it.md` includes five `demo-it` blocks:
 1. open Neovim directly on intro slide (`slide: slides/1-intro.1`)
