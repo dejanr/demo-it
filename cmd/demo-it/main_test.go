@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,6 +29,57 @@ func TestTmuxKeyNormalizesCommonSpecialKeys(t *testing.T) {
 	}
 	if got := tmuxKey("tab"); got != "Tab" {
 		t.Fatalf("tmuxKey(tab) = %q, want Tab", got)
+	}
+}
+
+func TestResolveCLIPathUsesPathDemoItWhenOverrideEmpty(t *testing.T) {
+	temp := t.TempDir()
+	demoItPath := filepath.Join(temp, "demo-it")
+	if err := os.WriteFile(demoItPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write demo-it: %v", err)
+	}
+
+	t.Setenv("DEMO_IT_PATH", "")
+	t.Setenv("PATH", temp)
+
+	resolved, err := resolveCLIPath()
+	if err != nil {
+		t.Fatalf("resolveCLIPath error: %v", err)
+	}
+	if resolved != demoItPath {
+		t.Fatalf("resolveCLIPath = %q, want %q", resolved, demoItPath)
+	}
+}
+
+func TestResolveCLIPathUsesOverride(t *testing.T) {
+	temp := t.TempDir()
+	custom := filepath.Join(temp, "demo-it-local")
+	if err := os.WriteFile(custom, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write custom demo-it: %v", err)
+	}
+
+	t.Setenv("DEMO_IT_PATH", custom)
+	t.Setenv("PATH", "")
+
+	resolved, err := resolveCLIPath()
+	if err != nil {
+		t.Fatalf("resolveCLIPath error: %v", err)
+	}
+	if resolved != custom {
+		t.Fatalf("resolveCLIPath = %q, want %q", resolved, custom)
+	}
+}
+
+func TestResolveCLIPathErrorsWithoutDemoItInPath(t *testing.T) {
+	t.Setenv("DEMO_IT_PATH", "")
+	t.Setenv("PATH", "")
+
+	_, err := resolveCLIPath()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "resolve demo-it via PATH") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

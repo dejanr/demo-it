@@ -801,13 +801,30 @@ func shellQuote(value string) string {
 }
 
 func resolveCLIPath() (string, error) {
-	if path, err := exec.LookPath("demo-it"); err == nil {
+	override := strings.TrimSpace(os.Getenv("DEMO_IT_PATH"))
+	if override != "" {
+		if strings.ContainsRune(override, os.PathSeparator) || strings.HasPrefix(override, ".") {
+			path, err := filepath.Abs(override)
+			if err != nil {
+				return "", fmt.Errorf("resolve DEMO_IT_PATH %q: %w", override, err)
+			}
+			if resolved, err := exec.LookPath(path); err == nil {
+				return resolved, nil
+			}
+			return "", fmt.Errorf("resolve DEMO_IT_PATH %q: not executable", override)
+		}
+		path, err := exec.LookPath(override)
+		if err != nil {
+			return "", fmt.Errorf("resolve DEMO_IT_PATH %q via PATH: %w", override, err)
+		}
 		return path, nil
 	}
-	if path, err := os.Executable(); err == nil {
-		return path, nil
+
+	path, err := exec.LookPath("demo-it")
+	if err != nil {
+		return "", fmt.Errorf("resolve demo-it via PATH: %w", err)
 	}
-	return "", errors.New("resolve demo-it executable path")
+	return path, nil
 }
 
 func ensureRunStarted(runID string, socketPath string) error {
