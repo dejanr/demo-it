@@ -19,8 +19,7 @@ let
     if pathStr == root then "" else lib.removePrefix "${root}/" pathStr;
 
   isRuntimePath =
-    rel:
-    rel == "" || lib.any (dir: rel == dir || lib.hasPrefix "${dir}/" rel) runtimeDirs;
+    rel: rel == "" || lib.any (dir: rel == dir || lib.hasPrefix "${dir}/" rel) runtimeDirs;
 
   src = lib.cleanSourceWith {
     src = ../.;

@@ -141,6 +141,34 @@ func TestSelectWorkspaceSessionsChoosesLatestWorkspace(t *testing.T) {
 	}
 }
 
+func TestLatestWorkspaceSessionByRole(t *testing.T) {
+	workspaces := []managedWorkspace{
+		{Display: "a-demo", DemoSession: "a-demo", NotesSession: "a-notes"},
+		{Display: "b-demo", DemoSession: "b-demo", NotesSession: "b-notes"},
+	}
+
+	if got := latestWorkspaceSessionByRole(workspaces, "demo"); got != "a-demo" {
+		t.Fatalf("latestWorkspaceSessionByRole(demo) = %q, want a-demo", got)
+	}
+	if got := latestWorkspaceSessionByRole(workspaces, "notes"); got != "a-notes" {
+		t.Fatalf("latestWorkspaceSessionByRole(notes) = %q, want a-notes", got)
+	}
+	if got := latestWorkspaceSessionByRole(workspaces, "unknown"); got != "" {
+		t.Fatalf("latestWorkspaceSessionByRole(unknown) = %q, want empty", got)
+	}
+}
+
+func TestLatestWorkspaceSessionByRoleSkipsEmptyEntries(t *testing.T) {
+	workspaces := []managedWorkspace{
+		{Display: "a-demo", DemoSession: "a-demo"},
+		{Display: "b-demo", NotesSession: "b-notes"},
+	}
+
+	if got := latestWorkspaceSessionByRole(workspaces, "notes"); got != "b-notes" {
+		t.Fatalf("latestWorkspaceSessionByRole(notes) = %q, want b-notes", got)
+	}
+}
+
 func TestSelectPaneToKeep(t *testing.T) {
 	panes := []paneState{{ID: "%9", Index: 2}, {ID: "%1", Index: 0}, {ID: "%2", Index: 1}}
 	if got := selectPaneToKeep(panes); got != "%1" {

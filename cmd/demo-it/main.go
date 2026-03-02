@@ -51,6 +51,8 @@ func run() error {
 		return killSessionsCommand(flag.Args()[1:])
 	case "notes":
 		return notesCommand()
+	case "show":
+		return showCommand()
 	case "start":
 		workspacePath := ""
 		switch flag.NArg() {
@@ -905,13 +907,7 @@ func notesCommand() error {
 		return errors.New("no demo-it tmux sessions")
 	}
 
-	var notesSession string
-	for _, workspace := range workspaces {
-		if workspace.NotesSession != "" {
-			notesSession = workspace.NotesSession
-			break
-		}
-	}
+	notesSession := latestWorkspaceSessionByRole(workspaces, "notes")
 	if notesSession == "" {
 		return errors.New("no demo-it notes session found")
 	}
@@ -920,6 +916,42 @@ func notesCommand() error {
 		return runTmuxWithStdio("switch-client", "-t", notesSession)
 	}
 	return runTmuxWithStdio("attach-session", "-t", notesSession)
+}
+
+func showCommand() error {
+	workspaces, err := listManagedWorkspaces()
+	if err != nil {
+		return err
+	}
+	if len(workspaces) == 0 {
+		return errors.New("no demo-it tmux sessions")
+	}
+
+	demoSession := latestWorkspaceSessionByRole(workspaces, "demo")
+	if demoSession == "" {
+		return errors.New("no demo-it demo session found")
+	}
+
+	if os.Getenv("TMUX") != "" {
+		return runTmuxWithStdio("switch-client", "-t", demoSession)
+	}
+	return runTmuxWithStdio("attach-session", "-t", demoSession)
+}
+
+func latestWorkspaceSessionByRole(workspaces []managedWorkspace, role string) string {
+	for _, workspace := range workspaces {
+		switch role {
+		case "demo":
+			if workspace.DemoSession != "" {
+				return workspace.DemoSession
+			}
+		case "notes":
+			if workspace.NotesSession != "" {
+				return workspace.NotesSession
+			}
+		}
+	}
+	return ""
 }
 
 func killSessionsCommand(rawArgs []string) error {
@@ -1310,6 +1342,7 @@ Commands:
   focus --policy <present|return|none>
   list
   notes
+  show
   kill [session-index ...]
 
 Start behavior:
@@ -1323,6 +1356,7 @@ Workspace mode:
 Session lifecycle:
   demo-it list               # show numbered managed workspaces (demo session)
   demo-it notes              # open notes session for latest workspace
+  demo-it show               # open demo session for latest workspace
   demo-it kill               # kill all managed sessions
   demo-it kill 1 3           # kill selected workspace indexes from list
 `

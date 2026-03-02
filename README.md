@@ -103,6 +103,7 @@ Session utilities:
 
 - `demo-it list` lists managed demo-it workspaces with numeric indexes (demo session per workspace)
 - `demo-it notes` opens the notes session for the latest workspace
+- `demo-it show` opens the demo session for the latest workspace
 - `demo-it kill` kills all managed demo-it tmux sessions
 - `demo-it kill <index ...>` kills selected workspace sessions by index from `demo-it list`
 - inside managed demo-it tmux sessions, `C-s` then `n` runs `demo-it next`, and `C-s` then `p` runs `demo-it prev`
