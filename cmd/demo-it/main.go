@@ -97,8 +97,6 @@ func run() error {
 		return statusCommand(*runID, *socketPath)
 	case "run-status":
 		return runProtocolCommand("status", flag.Args()[1:], *runID, *socketPath)
-	case "list":
-		return fmt.Errorf("'list' was removed; use 'status'")
 	case "kill":
 		return killSessionsCommand(flag.Args()[1:])
 	case "notes":
@@ -1968,7 +1966,7 @@ func runTmuxWithStdio(args ...string) error {
 
 func isProtocolCommand(name string) bool {
 	switch name {
-	case "start", "run-status", "reload", "next", "prev", "rerun", "jump", "focus":
+	case "start", "run-status", "reload", "next", "prev", "rerun", "jump", "focus", "list":
 		return true
 	default:
 		return false

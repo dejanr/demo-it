@@ -193,6 +193,9 @@ func TestIsProtocolCommand(t *testing.T) {
 	if !isProtocolCommand("run-status") {
 		t.Fatal("expected run-status to be protocol command")
 	}
+	if !isProtocolCommand("list") {
+		t.Fatal("expected list to be treated as reserved command")
+	}
 	if isProtocolCommand("status") {
 		t.Fatal("status should be session command")
 	}
