@@ -197,6 +197,100 @@ actions:
 	}
 }
 
+func TestParseStepsMarkdownParsesKeyMacro(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: macro
+actions:
+  - kind: key-macro
+    interval_ms: 90
+    keys:
+      - key: i
+      - key: h
+      - key: return
+        delay_ms: 250
+` + "```" + `
+`
+
+	steps, err := ParseStepsMarkdown(markdown)
+	if err != nil {
+		t.Fatalf("expected key-macro to parse, got %v", err)
+	}
+	action := steps[0].Actions[0]
+	if action.Kind != "key-macro" {
+		t.Fatalf("unexpected kind: %q", action.Kind)
+	}
+	if action.IntervalMS == nil || *action.IntervalMS != 90 {
+		t.Fatalf("interval_ms = %#v, want 90", action.IntervalMS)
+	}
+	if len(action.Keys) != 3 {
+		t.Fatalf("expected 3 macro keys, got %d", len(action.Keys))
+	}
+	if action.Keys[2].DelayMS == nil || *action.Keys[2].DelayMS != 250 {
+		t.Fatalf("delay_ms = %#v, want 250", action.Keys[2].DelayMS)
+	}
+}
+
+func TestParseStepsMarkdownRejectsKeyMacroWithoutKeys(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: macro
+actions:
+  - kind: key-macro
+` + "```" + `
+`
+
+	_, err := ParseStepsMarkdown(markdown)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "key-macro requires keys") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseStepsMarkdownRejectsKeyMacroNegativeDelay(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: macro
+actions:
+  - kind: key-macro
+    keys:
+      - key: a
+        delay_ms: -1
+` + "```" + `
+`
+
+	_, err := ParseStepsMarkdown(markdown)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "delay_ms") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseStepsMarkdownRejectsKeyMacroNegativeInterval(t *testing.T) {
+	markdown := `
+` + "```demo-it" + `
+title: macro
+actions:
+  - kind: key-macro
+    interval_ms: -5
+    keys:
+      - key: a
+` + "```" + `
+`
+
+	_, err := ParseStepsMarkdown(markdown)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "interval_ms") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseStepsMarkdownRejectsDuplicateTitles(t *testing.T) {
 	markdown := `
 ` + "```demo-it" + `

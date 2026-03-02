@@ -8,13 +8,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type KeyMacroKey struct {
+	Key     string `yaml:"key"`
+	DelayMS *int   `yaml:"delay_ms,omitempty"`
+}
+
 type Action struct {
-	Kind      string `yaml:"kind"`
-	Text      string `yaml:"text,omitempty"`
-	Key       string `yaml:"key,omitempty"`
-	Slide     string `yaml:"slide,omitempty"`
-	Direction string `yaml:"direction,omitempty"`
-	Path      string `yaml:"path,omitempty"`
+	Kind       string        `yaml:"kind"`
+	Text       string        `yaml:"text,omitempty"`
+	Key        string        `yaml:"key,omitempty"`
+	Slide      string        `yaml:"slide,omitempty"`
+	Direction  string        `yaml:"direction,omitempty"`
+	Path       string        `yaml:"path,omitempty"`
+	IntervalMS *int          `yaml:"interval_ms,omitempty"`
+	Keys       []KeyMacroKey `yaml:"keys,omitempty"`
 }
 
 type Step struct {
@@ -136,6 +143,23 @@ func decodeStep(raw string, line int) (Step, error) {
 		case "open-slide":
 			if strings.TrimSpace(action.Path) == "" {
 				return Step{}, fmt.Errorf("demo-it block at line %d: open-slide requires path", line)
+			}
+		case "key-macro":
+			if action.IntervalMS != nil && *action.IntervalMS < 0 {
+				return Step{}, fmt.Errorf("demo-it block at line %d: key-macro interval_ms must be >= 0", line)
+			}
+			if len(action.Keys) == 0 {
+				return Step{}, fmt.Errorf("demo-it block at line %d: key-macro requires keys", line)
+			}
+			for j, macroKey := range action.Keys {
+				macroKey.Key = strings.TrimSpace(macroKey.Key)
+				if macroKey.Key == "" {
+					return Step{}, fmt.Errorf("demo-it block at line %d: key-macro key at index %d is empty", line, j)
+				}
+				if macroKey.DelayMS != nil && *macroKey.DelayMS < 0 {
+					return Step{}, fmt.Errorf("demo-it block at line %d: key-macro delay_ms at index %d must be >= 0", line, j)
+				}
+				action.Keys[j] = macroKey
 			}
 		default:
 			return Step{}, fmt.Errorf("demo-it block at line %d: unsupported action kind %q", line, action.Kind)

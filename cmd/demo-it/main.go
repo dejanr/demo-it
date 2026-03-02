@@ -292,6 +292,10 @@ func runActions(targetSession string, actions []transcript.Action) error {
 			if err := openSlideAction(targetSession, action.Path); err != nil {
 				return err
 			}
+		case "key-macro":
+			if err := keyMacroAction(targetSession, action); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unsupported action kind: %s", action.Kind)
 		}
@@ -307,6 +311,64 @@ func tmuxKey(key string) string {
 	default:
 		return key
 	}
+}
+
+type keyMacroPlaybackStep struct {
+	Key        string
+	DelayAfter time.Duration
+}
+
+func keyMacroAction(targetSession string, action transcript.Action) error {
+	playback, err := keyMacroPlayback(action)
+	if err != nil {
+		return fmt.Errorf("key-macro action: %w", err)
+	}
+
+	for i, step := range playback {
+		if err := runTmux("send-keys", "-t", targetSession, tmuxKey(step.Key)); err != nil {
+			return fmt.Errorf("key-macro action (step %d): %w", i, err)
+		}
+		if step.DelayAfter > 0 && i+1 < len(playback) {
+			time.Sleep(step.DelayAfter)
+		}
+	}
+	return nil
+}
+
+func keyMacroPlayback(action transcript.Action) ([]keyMacroPlaybackStep, error) {
+	if len(action.Keys) == 0 {
+		return nil, errors.New("requires at least one key")
+	}
+
+	defaultInterval := 80
+	if action.IntervalMS != nil {
+		if *action.IntervalMS < 0 {
+			return nil, errors.New("interval_ms must be >= 0")
+		}
+		defaultInterval = *action.IntervalMS
+	}
+
+	playback := make([]keyMacroPlaybackStep, 0, len(action.Keys))
+	for i, macroKey := range action.Keys {
+		key := strings.TrimSpace(macroKey.Key)
+		if key == "" {
+			return nil, fmt.Errorf("key at index %d is empty", i)
+		}
+
+		delayMS := defaultInterval
+		if macroKey.DelayMS != nil {
+			if *macroKey.DelayMS < 0 {
+				return nil, fmt.Errorf("delay_ms at index %d must be >= 0", i)
+			}
+			delayMS = *macroKey.DelayMS
+		}
+		playback = append(playback, keyMacroPlaybackStep{
+			Key:        key,
+			DelayAfter: time.Duration(delayMS) * time.Millisecond,
+		})
+	}
+
+	return playback, nil
 }
 
 func splitPaneAction(targetSession string, direction string) error {

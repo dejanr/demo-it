@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dejanr/demo-it/internal/transcript"
 )
@@ -14,6 +15,52 @@ func TestTmuxKeyNormalizesReturn(t *testing.T) {
 	}
 	if got := tmuxKey("Enter"); got != "Enter" {
 		t.Fatalf("tmuxKey(Enter) = %q, want Enter", got)
+	}
+}
+
+func TestKeyMacroPlayback(t *testing.T) {
+	interval := 90
+	delay := 250
+	playback, err := keyMacroPlayback(transcript.Action{
+		IntervalMS: &interval,
+		Keys: []transcript.KeyMacroKey{
+			{Key: "i"},
+			{Key: "h"},
+			{Key: "return", DelayMS: &delay},
+		},
+	})
+	if err != nil {
+		t.Fatalf("keyMacroPlayback error: %v", err)
+	}
+	if len(playback) != 3 {
+		t.Fatalf("expected 3 playback keys, got %d", len(playback))
+	}
+	if got := playback[0].DelayAfter; got != 90*time.Millisecond {
+		t.Fatalf("playback[0].DelayAfter = %v, want %v", got, 90*time.Millisecond)
+	}
+	if got := playback[2].DelayAfter; got != 250*time.Millisecond {
+		t.Fatalf("playback[2].DelayAfter = %v, want %v", got, 250*time.Millisecond)
+	}
+}
+
+func TestKeyMacroPlaybackRejectsNegativeDelay(t *testing.T) {
+	delay := -1
+	_, err := keyMacroPlayback(transcript.Action{Keys: []transcript.KeyMacroKey{{Key: "a", DelayMS: &delay}}})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "delay_ms") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestKeyMacroPlaybackUsesDefaultInterval(t *testing.T) {
+	playback, err := keyMacroPlayback(transcript.Action{Keys: []transcript.KeyMacroKey{{Key: "a"}}})
+	if err != nil {
+		t.Fatalf("keyMacroPlayback error: %v", err)
+	}
+	if got := playback[0].DelayAfter; got != 80*time.Millisecond {
+		t.Fatalf("playback[0].DelayAfter = %v, want %v", got, 80*time.Millisecond)
 	}
 }
 
