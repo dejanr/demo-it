@@ -188,10 +188,14 @@ func (h *e2eHarness) paneCount(t *testing.T, sessionName string) int {
 }
 
 func (h *e2eHarness) runDemoIt(args ...string) (string, string, error) {
+	return h.runDemoItWithEnv(h.env, args...)
+}
+
+func (h *e2eHarness) runDemoItWithEnv(env []string, args ...string) (string, string, error) {
 	cliArgs := append([]string{"--run-id", h.runID, "--socket", h.socketPath}, args...)
 	cmd := exec.Command(h.cliPath, cliArgs...)
 	cmd.Dir = h.repoRoot
-	cmd.Env = h.env
+	cmd.Env = env
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout

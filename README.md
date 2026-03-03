@@ -15,6 +15,7 @@ It provides:
 - common checks: `fmt`, `lint`, `tests`, `tests-e2e`, `build`, `ci`
 - shared formatting config: `treefmt.toml` (used by both `nix fmt` and `fmt`)
 - `devenv up` runs `demo-itd` with auto-reload via `.air.toml`
+- inside the devenv shell, `DEMO_IT_SOCKET` defaults to `$DEVENV_ROOT/.devenv/demo-itd.sock` and `DEMO_IT_REQUIRE_LOCAL_DAEMON=1`, so CLI commands target the local devenv daemon
 
 ## Home Manager module (user daemon)
 
@@ -79,6 +80,8 @@ This is the recommended way to share the plugin with nixvim/Home Manager setups.
 
 Use `start` to reset/create deterministic tmux sessions:
 
+When using the devenv shell, `demo-it` expects the local daemon socket and will fail fast with a `run 'devenv up' first` hint if it is not running.
+
 ```bash
 demo-it start              # bootstrap from current working directory
 demo-it start ./examples/tmux-splits
@@ -117,10 +120,11 @@ Example generated action shape:
     - key: Enter
 ```
 
-Path mode is still supported and is equivalent to `demo-it start <workspace-path>`:
+Path mode is still supported and is equivalent to `demo-it start <workspace-path>` (or `demo-it start <transcript-file.md>`):
 
 ```bash
 demo-it ./examples/tmux-splits/
+demo-it ./examples/tmux-splits/demo-it.md
 ```
 
 For `examples/tmux-splits`, this creates:
@@ -128,7 +132,7 @@ For `examples/tmux-splits`, this creates:
 - `tmux-splits-demo`
 - `tmux-splits-notes`
 
-It opens/switches to `tmux-splits-demo`; open `tmux-splits-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it run-status` and `demo-it next` are available immediately. In single-workspace mode, `demo-it start` first kills previously managed demo-it tmux sessions, then creates the new workspace sessions. `demo-it start` requires `demo-it.md` in the selected workspace and exits with an error when missing. Slide assets are optional: action-only transcripts (for shell demos) also work, see `examples/no-slides`.
+It opens/switches to `tmux-splits-demo`; open `tmux-splits-notes` manually when needed. Workspace bootstrap also starts the daemon run context so `demo-it run-status` and `demo-it next` are available immediately. In single-workspace mode, `demo-it start` first kills previously managed demo-it tmux sessions, then creates the new workspace sessions. `demo-it start` accepts either a workspace directory (expects `<workspace>/demo-it.md`) or a transcript file path directly (for example `./test.md`). Slide assets are optional: action-only transcripts (for shell demos) also work, see `examples/no-slides`.
 
 When `demo-it` opens slides in Neovim panes, it now also runs `:DemoItPresentationEnable` (silently when available) so presentation-friendly UI defaults are applied automatically. Demo tmux sessions also start with `status off` for a cleaner stage view.
 

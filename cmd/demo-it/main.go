@@ -129,6 +129,8 @@ func run() error {
 		return recordSplitEventCommand(flag.Args()[1:])
 	case "__record-shell":
 		return recordShellCommand(flag.Args()[1:])
+	case "__bootstrap-step":
+		return bootstrapStepCommand(flag.Args()[1:])
 	case "trace-next":
 		return traceNextCommand(*runID, *socketPath)
 	}
@@ -193,7 +195,7 @@ func runProtocolCommand(target string, rawArgs []string, runID string, socketPat
 func sendWithAutoStart(c client.SocketClient, req protocol.Request, command string, runID string, socketPath string) (protocol.Response, error) {
 	resp, err := c.Send(req)
 	if err != nil {
-		return protocol.Response{}, err
+		return protocol.Response{}, wrapLocalDaemonUnavailable(err, socketPath)
 	}
 
 	if resp.OK || resp.Error == nil {
@@ -209,7 +211,7 @@ func sendWithAutoStart(c client.SocketClient, req protocol.Request, command stri
 
 	resp, err = c.Send(req)
 	if err != nil {
-		return protocol.Response{}, err
+		return protocol.Response{}, wrapLocalDaemonUnavailable(err, socketPath)
 	}
 	return resp, nil
 }
@@ -223,19 +225,75 @@ func shouldAutoStartOnRunNotFound(command string) bool {
 	}
 }
 
-func bootstrapWorkspace(rawPath string, runID string, socketPath string, requireTranscript bool) error {
-	workspacePath, err := filepath.Abs(rawPath)
+func wrapLocalDaemonUnavailable(err error, socketPath string) error {
+	if err == nil {
+		return nil
+	}
+	if !localDaemonRequired() || !isDaemonConnectionError(err) {
+		return err
+	}
+	return fmt.Errorf("local demo-it daemon is not running on %s; run 'devenv up' first", strings.TrimSpace(socketPath))
+}
+
+func localDaemonRequired() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("DEMO_IT_REQUIRE_LOCAL_DAEMON")))
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDaemonConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "dial unix") && !strings.Contains(message, "connect") {
+		return false
+	}
+	return strings.Contains(message, "no such file or directory") || strings.Contains(message, "connection refused") || strings.Contains(message, "connection reset") || strings.Contains(message, "broken pipe")
+}
+
+type bootstrapTarget struct {
+	WorkspacePath  string
+	TranscriptPath string
+}
+
+func resolveBootstrapTarget(rawPath string) (bootstrapTarget, error) {
+	absolutePath, err := filepath.Abs(rawPath)
 	if err != nil {
-		return fmt.Errorf("resolve workspace path: %w", err)
+		return bootstrapTarget{}, fmt.Errorf("resolve workspace path: %w", err)
 	}
 
-	stat, err := os.Stat(workspacePath)
+	stat, err := os.Stat(absolutePath)
 	if err != nil {
-		return fmt.Errorf("workspace path: %w", err)
+		return bootstrapTarget{}, fmt.Errorf("workspace path: %w", err)
 	}
-	if !stat.IsDir() {
-		return fmt.Errorf("workspace path is not a directory: %s", workspacePath)
+	if stat.IsDir() {
+		return bootstrapTarget{
+			WorkspacePath:  absolutePath,
+			TranscriptPath: filepath.Join(absolutePath, "demo-it.md"),
+		}, nil
 	}
+	if stat.Mode().IsRegular() {
+		return bootstrapTarget{
+			WorkspacePath:  filepath.Dir(absolutePath),
+			TranscriptPath: absolutePath,
+		}, nil
+	}
+
+	return bootstrapTarget{}, fmt.Errorf("workspace path must be a directory or file: %s", absolutePath)
+}
+
+func bootstrapWorkspace(rawPath string, runID string, socketPath string, requireTranscript bool) error {
+	target, err := resolveBootstrapTarget(rawPath)
+	if err != nil {
+		return err
+	}
+	workspacePath := target.WorkspacePath
+	transcriptPath := target.TranscriptPath
 
 	demoSession := runctx.DemoSessionName(workspacePath)
 	notesSession := runctx.NotesSessionName(workspacePath)
@@ -262,15 +320,15 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string, require
 		return err
 	}
 
-	steps, currentStep, err := executeBootstrapStep(workspacePath, demoSession, requireTranscript)
+	steps, currentStep, err := executeBootstrapStep(transcriptPath, requireTranscript)
 	if err != nil {
 		return err
 	}
 
-	if err := setSessionMetadata(demoSession, workspacePath, "demo", currentStep); err != nil {
+	if err := setSessionMetadata(demoSession, workspacePath, transcriptPath, "demo", currentStep); err != nil {
 		return err
 	}
-	if err := setSessionMetadata(notesSession, workspacePath, "notes", currentStep); err != nil {
+	if err := setSessionMetadata(notesSession, workspacePath, transcriptPath, "notes", currentStep); err != nil {
 		return err
 	}
 	if err := setSessionRuntimeContext(demoSession, runID, socketPath); err != nil {
@@ -305,9 +363,18 @@ func bootstrapWorkspace(rawPath string, runID string, socketPath string, require
 	if err := syncAutoNextWithDaemon(steps, currentStep, runID, socketPath); err != nil {
 		return err
 	}
+	if err := scheduleBootstrapStepPlayback(cliPath, demoSession, notesSession, workspacePath, transcriptPath, currentStep, 500*time.Millisecond); err != nil {
+		return err
+	}
 
 	if os.Getenv("TMUX") != "" {
-		return runTmuxWithStdio("switch-client", "-t", demoSession)
+		if err := runTmux("switch-client", "-t", demoSession); err != nil {
+			if isTmuxNoCurrentClientError(err) {
+				return nil
+			}
+			return err
+		}
+		return nil
 	}
 	return runTmuxWithStdio("attach-session", "-t", demoSession)
 }
@@ -339,8 +406,11 @@ func createSession(name string, cwd string) error {
 	return nil
 }
 
-func executeBootstrapStep(workspacePath string, demoSession string, requireTranscript bool) ([]transcript.Step, int, error) {
-	stepsPath := filepath.Join(workspacePath, "demo-it.md")
+func executeBootstrapStep(transcriptPath string, requireTranscript bool) ([]transcript.Step, int, error) {
+	stepsPath := strings.TrimSpace(transcriptPath)
+	if stepsPath == "" {
+		return nil, -1, errors.New("bootstrap transcript path is empty")
+	}
 	debugf("bootstrap parse steps path=%q", stepsPath)
 	steps, err := transcript.ParseStepsFile(stepsPath)
 	if err != nil {
@@ -357,10 +427,120 @@ func executeBootstrapStep(workspacePath string, demoSession string, requireTrans
 		return steps, -1, nil
 	}
 	debugf("bootstrap parsed steps=%d first_title=%q", len(steps), steps[0].Title)
-	if err := runActions(demoSession, steps[0].Actions); err != nil {
-		return nil, -1, err
-	}
 	return steps, 0, nil
+}
+
+func scheduleBootstrapStepPlayback(cliPath string, demoSession string, notesSession string, workspacePath string, transcriptPath string, stepIndex int, delay time.Duration) error {
+	if stepIndex < 0 {
+		return nil
+	}
+	delayMS := delay.Milliseconds()
+	if delayMS < 0 {
+		delayMS = 0
+	}
+	command := fmt.Sprintf(
+		"sleep %s; DEMO_IT_DEBUG_LOG=%s %s __bootstrap-step --session %s --notes-session %s --workspace %s --transcript %s --step %d --expected-step %d",
+		shellQuote(fmt.Sprintf("%.3f", float64(delayMS)/1000.0)),
+		shellQuote(strings.TrimSpace(os.Getenv("DEMO_IT_DEBUG_LOG"))),
+		shellQuote(cliPath),
+		shellQuote(demoSession),
+		shellQuote(notesSession),
+		shellQuote(workspacePath),
+		shellQuote(transcriptPath),
+		stepIndex,
+		stepIndex,
+	)
+	if err := runTmux("run-shell", "-b", command); err != nil {
+		return fmt.Errorf("schedule bootstrap step playback: %w", err)
+	}
+	return nil
+}
+
+func bootstrapStepCommand(rawArgs []string) error {
+	fs := flag.NewFlagSet("__bootstrap-step", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	sessionName := fs.String("session", "", "demo tmux session name")
+	notesSessionName := fs.String("notes-session", "", "notes tmux session name")
+	workspacePath := fs.String("workspace", "", "workspace path")
+	transcriptPath := fs.String("transcript", "", "transcript path")
+	stepIndex := fs.Int("step", 0, "step index to execute")
+	expectedStep := fs.Int("expected-step", -1, "expected current step before execution")
+	if err := fs.Parse(rawArgs); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return errors.New("__bootstrap-step does not accept positional arguments")
+	}
+
+	demoSession := strings.TrimSpace(*sessionName)
+	if demoSession == "" {
+		return errors.New("__bootstrap-step requires --session")
+	}
+	transcriptFile := strings.TrimSpace(*transcriptPath)
+	if transcriptFile == "" {
+		return errors.New("__bootstrap-step requires --transcript")
+	}
+	workspace := strings.TrimSpace(*workspacePath)
+	if workspace == "" {
+		workspace = filepath.Dir(transcriptFile)
+	}
+
+	exists, err := tmuxSessionExists(demoSession)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+
+	if *expectedStep >= 0 {
+		currentStep, err := sessionStepValue(demoSession)
+		if err != nil {
+			return nil
+		}
+		if currentStep != *expectedStep {
+			return nil
+		}
+	}
+
+	steps, err := transcript.ParseStepsFile(transcriptFile)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", transcriptFile, err)
+	}
+	if *stepIndex < 0 || *stepIndex >= len(steps) {
+		return nil
+	}
+	if err := runActions(demoSession, steps[*stepIndex].Actions); err != nil {
+		return err
+	}
+	if err := setSessionMetadata(demoSession, workspace, transcriptFile, "demo", *stepIndex); err != nil {
+		return err
+	}
+	resolvedNotesSession := strings.TrimSpace(*notesSessionName)
+	if resolvedNotesSession != "" {
+		notesExists, err := tmuxSessionExists(resolvedNotesSession)
+		if err != nil {
+			return err
+		}
+		if notesExists {
+			if err := setSessionMetadata(resolvedNotesSession, workspace, transcriptFile, "notes", *stepIndex); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func sessionStepValue(sessionName string) (int, error) {
+	value, err := getSessionOption(sessionName, "@demo_it_step")
+	if err != nil {
+		return -1, err
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return -1, err
+	}
+	return parsed, nil
 }
 
 func runActions(targetSession string, actions []transcript.Action) error {
@@ -854,7 +1034,7 @@ func ensureRunStarted(runID string, socketPath string) error {
 	c := client.SocketClient{SocketPath: socketPath}
 	resp, err := c.Send(req)
 	if err != nil {
-		return fmt.Errorf("start run via daemon: %w", err)
+		return fmt.Errorf("start run via daemon: %w", wrapLocalDaemonUnavailable(err, socketPath))
 	}
 	if !resp.OK {
 		if resp.Error == nil {
@@ -866,11 +1046,12 @@ func ensureRunStarted(runID string, socketPath string) error {
 }
 
 type managedSession struct {
-	Name         string
-	Role         string
-	Workspace    string
-	Step         int
-	LastAttached int64
+	Name           string
+	Role           string
+	Workspace      string
+	TranscriptPath string
+	Step           int
+	LastAttached   int64
 }
 
 type managedWorkspace struct {
@@ -882,12 +1063,15 @@ type managedWorkspace struct {
 	LastAttached int64
 }
 
-func setSessionMetadata(name string, workspace string, role string, step int) error {
+func setSessionMetadata(name string, workspace string, transcriptPath string, role string, step int) error {
 	if err := runTmux("set-option", "-t", name, "-q", "@demo_it", "1"); err != nil {
 		return fmt.Errorf("mark tmux session %q: %w", name, err)
 	}
 	if err := runTmux("set-option", "-t", name, "-q", "@demo_it_workspace", workspace); err != nil {
 		return fmt.Errorf("set workspace metadata for %q: %w", name, err)
+	}
+	if err := runTmux("set-option", "-t", name, "-q", "@demo_it_transcript", transcriptPath); err != nil {
+		return fmt.Errorf("set transcript metadata for %q: %w", name, err)
 	}
 	if err := runTmux("set-option", "-t", name, "-q", "@demo_it_role", role); err != nil {
 		return fmt.Errorf("set role metadata for %q: %w", name, err)
@@ -1034,7 +1218,11 @@ func advanceWorkspaceStepForCommand(command string, runID string, socketPath str
 	}
 	debugf("advance workspace selected demo=%q notes_present=%v step=%d", demoSession.Name, notesSession != nil, demoSession.Step)
 
-	stepsPath := filepath.Join(demoSession.Workspace, "demo-it.md")
+	transcriptPath := strings.TrimSpace(demoSession.TranscriptPath)
+	if transcriptPath == "" {
+		transcriptPath = filepath.Join(demoSession.Workspace, "demo-it.md")
+	}
+	stepsPath := transcriptPath
 	steps, err := transcript.ParseStepsFile(stepsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1090,7 +1278,7 @@ func advanceWorkspaceStepForCommand(command string, runID string, socketPath str
 			return workspaceStepTransition{}, err
 		}
 	}
-	if err := setSessionMetadata(demoSession.Name, demoSession.Workspace, "demo", nextStep); err != nil {
+	if err := setSessionMetadata(demoSession.Name, demoSession.Workspace, transcriptPath, "demo", nextStep); err != nil {
 		return workspaceStepTransition{}, err
 	}
 	notesText := renderSpeakerNotes(steps, nextStep)
@@ -1098,7 +1286,7 @@ func advanceWorkspaceStepForCommand(command string, runID string, socketPath str
 		return workspaceStepTransition{}, err
 	}
 	if notesSession != nil {
-		if err := setSessionMetadata(notesSession.Name, demoSession.Workspace, "notes", nextStep); err != nil {
+		if err := setSessionMetadata(notesSession.Name, demoSession.Workspace, transcriptPath, "notes", nextStep); err != nil {
 			return workspaceStepTransition{}, err
 		}
 		if err := refreshNotesSession(notesSession.Name, demoSession.Workspace, notesText); err != nil {
@@ -1156,7 +1344,7 @@ func syncNotesWithDaemon(notesText string, runID string, socketPath string) erro
 	c := client.SocketClient{SocketPath: socketPath}
 	resp, err := c.Send(req)
 	if err != nil {
-		return fmt.Errorf("set notes via daemon: %w", err)
+		return fmt.Errorf("set notes via daemon: %w", wrapLocalDaemonUnavailable(err, socketPath))
 	}
 	if !resp.OK {
 		if resp.Error == nil {
@@ -1200,7 +1388,7 @@ func syncAutoNextWithDaemon(steps []transcript.Step, stepIndex int, runID string
 	c := client.SocketClient{SocketPath: socketPath}
 	resp, err := c.Send(req)
 	if err != nil {
-		return fmt.Errorf("set auto-next via daemon: %w", err)
+		return fmt.Errorf("set auto-next via daemon: %w", wrapLocalDaemonUnavailable(err, socketPath))
 	}
 	if !resp.OK {
 		if resp.Error == nil {
@@ -1270,7 +1458,7 @@ func daemonSupportsCapability(runID string, socketPath string, capability string
 
 	resp, err := c.Send(statusReq)
 	if err != nil {
-		return false, fmt.Errorf("check daemon capabilities: %w", err)
+		return false, fmt.Errorf("check daemon capabilities: %w", wrapLocalDaemonUnavailable(err, socketPath))
 	}
 	if !resp.OK && resp.Error != nil && resp.Error.Code == "run_not_found" {
 		if err := ensureRunStarted(runID, socketPath); err != nil {
@@ -1278,7 +1466,7 @@ func daemonSupportsCapability(runID string, socketPath string, capability string
 		}
 		resp, err = c.Send(statusReq)
 		if err != nil {
-			return false, fmt.Errorf("check daemon capabilities: %w", err)
+			return false, fmt.Errorf("check daemon capabilities: %w", wrapLocalDaemonUnavailable(err, socketPath))
 		}
 	}
 	if !resp.OK {
@@ -2675,7 +2863,7 @@ func workspaceKey(session managedSession) string {
 }
 
 func listManagedSessionDetails() ([]managedSession, error) {
-	output, err := runTmuxOutput("list-sessions", "-F", "#{session_name}\t#{@demo_it}\t#{@demo_it_role}\t#{@demo_it_workspace}\t#{@demo_it_step}\t#{session_last_attached}")
+	output, err := runTmuxOutput("list-sessions", "-F", "#{session_name}\t#{@demo_it}\t#{@demo_it_role}\t#{@demo_it_workspace}\t#{@demo_it_transcript}\t#{@demo_it_step}\t#{session_last_attached}")
 	if err != nil {
 		if isTmuxNoServerError(err) {
 			return nil, nil
@@ -2690,11 +2878,12 @@ func listManagedSessionDetails() ([]managedSession, error) {
 			continue
 		}
 
-		parts := strings.SplitN(line, "\t", 6)
+		parts := strings.SplitN(line, "\t", 7)
 		name := strings.TrimSpace(parts[0])
 		marker := ""
 		role := ""
 		workspace := ""
+		transcriptPath := ""
 		step := -1
 		lastAttached := int64(0)
 		if len(parts) > 1 {
@@ -2707,12 +2896,15 @@ func listManagedSessionDetails() ([]managedSession, error) {
 			workspace = strings.TrimSpace(parts[3])
 		}
 		if len(parts) > 4 {
-			if parsed, err := strconv.Atoi(strings.TrimSpace(parts[4])); err == nil {
+			transcriptPath = strings.TrimSpace(parts[4])
+		}
+		if len(parts) > 5 {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(parts[5])); err == nil {
 				step = parsed
 			}
 		}
-		if len(parts) > 5 {
-			if parsed, err := strconv.ParseInt(strings.TrimSpace(parts[5]), 10, 64); err == nil {
+		if len(parts) > 6 {
+			if parsed, err := strconv.ParseInt(strings.TrimSpace(parts[6]), 10, 64); err == nil {
 				lastAttached = parsed
 			}
 		}
@@ -2732,11 +2924,12 @@ func listManagedSessionDetails() ([]managedSession, error) {
 		}
 		seen[name] = struct{}{}
 		sessions = append(sessions, managedSession{
-			Name:         name,
-			Role:         role,
-			Workspace:    workspace,
-			Step:         step,
-			LastAttached: lastAttached,
+			Name:           name,
+			Role:           role,
+			Workspace:      workspace,
+			TranscriptPath: transcriptPath,
+			Step:           step,
+			LastAttached:   lastAttached,
 		})
 	}
 
@@ -2749,7 +2942,7 @@ func isLegacyDemoSession(name string) bool {
 
 func isTmuxNoServerError(err error) bool {
 	message := err.Error()
-	return strings.Contains(message, "no server running") || strings.Contains(message, "failed to connect to server")
+	return strings.Contains(message, "no server running") || strings.Contains(message, "failed to connect to server") || strings.Contains(message, "error connecting to")
 }
 
 func isTmuxNoCurrentClientError(err error) bool {
@@ -2939,8 +3132,8 @@ Commands:
 
 Start behavior:
   start (without a path) bootstraps the current working directory.
-  start <workspace-path> bootstraps that workspace.
-  start requires <workspace>/demo-it.md.
+  start <workspace-path> bootstraps that workspace (expects <workspace>/demo-it.md).
+  start <transcript-path.md> bootstraps from that transcript file.
 
 Record behavior:
   record (without a path) records tmux actions in the current working directory.
@@ -2948,6 +3141,7 @@ Record behavior:
 
 Workspace mode:
   Passing a workspace path directly is equivalent to start <workspace-path>.
+  Passing a transcript file path directly is equivalent to start <transcript-path.md>.
 
 Session lifecycle:
   demo-it status             # show active managed workspace/session status

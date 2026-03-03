@@ -21,7 +21,7 @@
   process.manager.before = ''
     echo ""
     echo "demo-it daemon process"
-    echo "  socket: auto (use --socket to override)"
+    echo "  socket: $DEVENV_ROOT/.devenv/demo-itd.sock"
     echo ""
     echo "Neovim local plugin testing"
     echo "  :set rtp+=$DEVENV_ROOT"
@@ -40,7 +40,10 @@
 
   processes.demo-itd.exec = ''
     cd "$DEVENV_ROOT"
-    air -c .air.toml
+    mkdir -p "$DEVENV_ROOT/.devenv"
+    export DEMO_IT_SOCKET="$DEVENV_ROOT/.devenv/demo-itd.sock"
+    export DEMO_IT_REQUIRE_LOCAL_DAEMON=1
+    air -c .air.toml -build.args_bin "--socket=$DEMO_IT_SOCKET"
   '';
 
   scripts = {
@@ -81,6 +84,8 @@
 
   enterShell = ''
     export PATH="$DEVENV_ROOT/bin:$PATH"
+    export DEMO_IT_SOCKET="$DEVENV_ROOT/.devenv/demo-itd.sock"
+    export DEMO_IT_REQUIRE_LOCAL_DAEMON=1
 
     if [[ -n "''${DIRENV_IN_ENVRC:-}" || $- == *i* ]]; then
       echo "# demo-it"

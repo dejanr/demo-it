@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -210,6 +211,25 @@ func TestShouldAutoStartOnRunNotFound(t *testing.T) {
 	}
 	if shouldAutoStartOnRunNotFound("status") {
 		t.Fatal("status should not auto start")
+	}
+}
+
+func TestWrapLocalDaemonUnavailable(t *testing.T) {
+	original := errors.New("dial unix /tmp/demo.sock: connect: no such file or directory")
+
+	t.Setenv("DEMO_IT_REQUIRE_LOCAL_DAEMON", "1")
+	wrapped := wrapLocalDaemonUnavailable(original, "/tmp/demo.sock")
+	if wrapped == nil {
+		t.Fatal("expected wrapped error")
+	}
+	if !strings.Contains(wrapped.Error(), "run 'devenv up' first") {
+		t.Fatalf("unexpected wrapped error: %v", wrapped)
+	}
+
+	t.Setenv("DEMO_IT_REQUIRE_LOCAL_DAEMON", "0")
+	unwrapped := wrapLocalDaemonUnavailable(original, "/tmp/demo.sock")
+	if unwrapped != original {
+		t.Fatalf("expected original error when guard disabled, got %v", unwrapped)
 	}
 }
 
@@ -644,7 +664,8 @@ func TestNotesPaneCommand(t *testing.T) {
 
 func TestExecuteBootstrapStepRequiresTranscriptWhenRequested(t *testing.T) {
 	workspace := t.TempDir()
-	_, _, err := executeBootstrapStep(workspace, "demo-session", true)
+	transcriptPath := filepath.Join(workspace, "demo-it.md")
+	_, _, err := executeBootstrapStep(transcriptPath, true)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -655,7 +676,8 @@ func TestExecuteBootstrapStepRequiresTranscriptWhenRequested(t *testing.T) {
 
 func TestExecuteBootstrapStepAllowsMissingTranscriptWhenOptional(t *testing.T) {
 	workspace := t.TempDir()
-	steps, step, err := executeBootstrapStep(workspace, "demo-session", false)
+	transcriptPath := filepath.Join(workspace, "demo-it.md")
+	steps, step, err := executeBootstrapStep(transcriptPath, false)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -703,6 +725,39 @@ func TestResolveRecordWorkspacePathRejectsMultiplePaths(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "at most one workspace path") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveBootstrapTargetForDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	target, err := resolveBootstrapTarget(workspace)
+	if err != nil {
+		t.Fatalf("resolveBootstrapTarget error: %v", err)
+	}
+	if target.WorkspacePath != workspace {
+		t.Fatalf("WorkspacePath = %q, want %q", target.WorkspacePath, workspace)
+	}
+	wantTranscript := filepath.Join(workspace, "demo-it.md")
+	if target.TranscriptPath != wantTranscript {
+		t.Fatalf("TranscriptPath = %q, want %q", target.TranscriptPath, wantTranscript)
+	}
+}
+
+func TestResolveBootstrapTargetForTranscriptFile(t *testing.T) {
+	workspace := t.TempDir()
+	transcriptPath := filepath.Join(workspace, "test.md")
+	if err := os.WriteFile(transcriptPath, []byte("# demo"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	target, err := resolveBootstrapTarget(transcriptPath)
+	if err != nil {
+		t.Fatalf("resolveBootstrapTarget error: %v", err)
+	}
+	if target.WorkspacePath != workspace {
+		t.Fatalf("WorkspacePath = %q, want %q", target.WorkspacePath, workspace)
+	}
+	if target.TranscriptPath != transcriptPath {
+		t.Fatalf("TranscriptPath = %q, want %q", target.TranscriptPath, transcriptPath)
 	}
 }
 
