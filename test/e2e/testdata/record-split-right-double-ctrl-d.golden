@@ -1,0 +1,14 @@
+```demo-it
+title: Recorded interaction
+actions:
+    - kind: split-pane
+    - kind: key-macro
+      delay_ms: 500
+      keys:
+        - key: C-d
+    - kind: key-macro
+      delay_ms: 500
+      keys:
+        - key: C-d
+speaker_notes: 'TODO: add speaker notes.'
+```

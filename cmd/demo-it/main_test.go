@@ -391,7 +391,7 @@ func TestNormalizeTraceForTextSnapshotGolden(t *testing.T) {
 		"\x1b]0;demo-it\x07\x1b[?25l$ printf 'hello\\n'\r\nhello\r\n$ \x1b[0m\x1bP+q4D73\x1b\\"
 
 	got := normalizeTraceForTextSnapshot(raw)
-	goldenPath := filepath.Join("tests", "testdata", "trace-normalized.golden")
+	goldenPath := filepath.Join("testdata", "trace-normalized.golden")
 	wantBytes, err := os.ReadFile(goldenPath)
 	if err != nil {
 		t.Fatalf("read golden: %v", err)
@@ -682,5 +682,230 @@ func TestRenderSpeakerNotes(t *testing.T) {
 	rendered = renderSpeakerNotes(steps, 9)
 	if rendered != "second note\n" {
 		t.Fatalf("unexpected clamped notes output: %q", rendered)
+	}
+}
+
+func TestResolveRecordWorkspacePath(t *testing.T) {
+	workspace := t.TempDir()
+	resolved, err := resolveRecordWorkspacePath([]string{workspace})
+	if err != nil {
+		t.Fatalf("resolveRecordWorkspacePath error: %v", err)
+	}
+	if resolved != workspace {
+		t.Fatalf("resolveRecordWorkspacePath = %q, want %q", resolved, workspace)
+	}
+}
+
+func TestResolveRecordWorkspacePathRejectsMultiplePaths(t *testing.T) {
+	_, err := resolveRecordWorkspacePath([]string{"a", "b"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "at most one workspace path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRecordedActionsCollapsesMultipleKillPaneEvents(t *testing.T) {
+	events := []recordEvent{
+		{Kind: "split-pane"},
+		{Kind: "kill-pane"},
+		{Kind: "kill-pane"},
+	}
+
+	actions := recordedActions(events)
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(actions))
+	}
+	if actions[0].Kind != "split-pane" {
+		t.Fatalf("actions[0].Kind = %q, want split-pane", actions[0].Kind)
+	}
+	if actions[1].Kind != "killall-pane" {
+		t.Fatalf("actions[1].Kind = %q, want killall-pane", actions[1].Kind)
+	}
+}
+
+func TestRenderRecordedBlockAddsFallbackActionWhenEmpty(t *testing.T) {
+	block, err := renderRecordedBlock("", nil)
+	if err != nil {
+		t.Fatalf("renderRecordedBlock error: %v", err)
+	}
+	if !strings.Contains(block, "```demo-it") {
+		t.Fatalf("expected fenced block, got %q", block)
+	}
+	if !strings.Contains(block, "title: Recorded interaction") {
+		t.Fatalf("expected default title, got %q", block)
+	}
+	if !strings.Contains(block, "kind: insert-text") {
+		t.Fatalf("expected fallback action, got %q", block)
+	}
+}
+
+func TestIsRecordEventKind(t *testing.T) {
+	if !isRecordEventKind("split-pane") {
+		t.Fatal("expected split-pane to be supported")
+	}
+	if isRecordEventKind("insert-text") {
+		t.Fatal("insert-text should not be a raw record event")
+	}
+}
+
+func TestRecordSplitKindFromHookArguments(t *testing.T) {
+	if got := recordSplitKindFromHookArguments("-h -t demo-it-record"); got != "split-pane" {
+		t.Fatalf("recordSplitKindFromHookArguments(-h) = %q, want split-pane", got)
+	}
+	if got := recordSplitKindFromHookArguments("-v -t demo-it-record"); got != "split-pane-vertical" {
+		t.Fatalf("recordSplitKindFromHookArguments(-v) = %q, want split-pane-vertical", got)
+	}
+	if got := recordSplitKindFromHookArguments(""); got != "split-pane" {
+		t.Fatalf("recordSplitKindFromHookArguments(empty) = %q, want split-pane", got)
+	}
+}
+
+func TestRecordPaneLogLabelAndSelector(t *testing.T) {
+	label := recordPaneLogLabel("%12", "1")
+	if label != "pane-1-12" {
+		t.Fatalf("recordPaneLogLabel = %q, want pane-1-12", label)
+	}
+	if selector := recordPaneSelectorFromLogName(label + ".timing.log"); selector != "1" {
+		t.Fatalf("recordPaneSelectorFromLogName = %q, want 1", selector)
+	}
+	if selector := recordPaneSelectorFromLogName("pane-0-1.timing.log"); selector != "" {
+		t.Fatalf("recordPaneSelectorFromLogName pane-0 should be empty selector, got %q", selector)
+	}
+}
+
+func TestExtractRecordInputPayload(t *testing.T) {
+	raw := []byte("Script started on now\nls\nexit\n\nScript done on now\n")
+	payload, err := extractRecordInputPayload(raw, len("ls\nexit\n"))
+	if err != nil {
+		t.Fatalf("extractRecordInputPayload error: %v", err)
+	}
+	if string(payload) != "ls\nexit\n" {
+		t.Fatalf("extractRecordInputPayload = %q, want %q", string(payload), "ls\\nexit\\n")
+	}
+}
+
+func TestParseRecordInputTimingAccumulatesAllRecordDeltas(t *testing.T) {
+	timingPath := filepath.Join(t.TempDir(), "timing.log")
+	content := "H 0.000000 START_TIME 2026-03-03 14:14:34+01:00\n" +
+		"O 0.300000 10\n" +
+		"I 0.200000 1\n"
+	if err := os.WriteFile(timingPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write timing file: %v", err)
+	}
+	chunks, total, err := parseRecordInputTiming(timingPath, nil)
+	if err != nil {
+		t.Fatalf("parseRecordInputTiming error: %v", err)
+	}
+	if total != 1 || len(chunks) != 1 {
+		t.Fatalf("unexpected chunks/total: %#v total=%d", chunks, total)
+	}
+	start, err := time.Parse("2006-01-02 15:04:05-07:00", "2026-03-03 14:14:34+01:00")
+	if err != nil {
+		t.Fatalf("parse start time: %v", err)
+	}
+	want := start.Add(500 * time.Millisecond)
+	if !chunks[0].Timestamp.Equal(want) {
+		t.Fatalf("chunk timestamp = %s, want %s", chunks[0].Timestamp, want)
+	}
+}
+
+func TestParseRecordInputTimingUsesStartOverride(t *testing.T) {
+	timingPath := filepath.Join(t.TempDir(), "timing.log")
+	content := "H 0.000000 START_TIME 2026-03-03 14:14:34+01:00\n" +
+		"I 0.200000 1\n"
+	if err := os.WriteFile(timingPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write timing file: %v", err)
+	}
+	override := time.Date(2026, time.March, 3, 13, 14, 34, 750000000, time.UTC)
+	chunks, total, err := parseRecordInputTiming(timingPath, &override)
+	if err != nil {
+		t.Fatalf("parseRecordInputTiming error: %v", err)
+	}
+	if total != 1 || len(chunks) != 1 {
+		t.Fatalf("unexpected chunks/total: %#v total=%d", chunks, total)
+	}
+	want := override.Add(200 * time.Millisecond)
+	if !chunks[0].Timestamp.Equal(want) {
+		t.Fatalf("chunk timestamp = %s, want %s", chunks[0].Timestamp, want)
+	}
+}
+
+func TestRecordActionsFromInputChunk(t *testing.T) {
+	timestamp := time.Date(2026, time.March, 3, 12, 0, 0, 0, time.UTC)
+	actions := recordActionsFromInputChunk([]byte("ls\n\t\x1b[A\x7f\x04"), timestamp, "1")
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 key-macro actions, got %d", len(actions))
+	}
+	first := actions[0].Action
+	if first.Kind != "key-macro" || first.Pane != "1" {
+		t.Fatalf("unexpected first action: %#v", first)
+	}
+	firstWant := []string{"l", "s", "Enter"}
+	if len(first.Keys) != len(firstWant) {
+		t.Fatalf("first key count = %d, want %d", len(first.Keys), len(firstWant))
+	}
+	for i, expected := range firstWant {
+		if first.Keys[i].Key != expected {
+			t.Fatalf("first.Keys[%d] = %q, want %q", i, first.Keys[i].Key, expected)
+		}
+	}
+
+	second := actions[1].Action
+	if second.Kind != "key-macro" || second.Pane != "1" {
+		t.Fatalf("unexpected second action: %#v", second)
+	}
+	secondWant := []string{"Tab", "Up", "BSpace", "C-d"}
+	if len(second.Keys) != len(secondWant) {
+		t.Fatalf("second key count = %d, want %d", len(second.Keys), len(secondWant))
+	}
+	for i, expected := range secondWant {
+		if second.Keys[i].Key != expected {
+			t.Fatalf("second.Keys[%d] = %q, want %q", i, second.Keys[i].Key, expected)
+		}
+	}
+}
+
+func TestRecordTimedActionsFromKeyEventsSplitsOnEnterAndTracksDelay(t *testing.T) {
+	base := time.Date(2026, time.March, 3, 12, 0, 0, 0, time.UTC)
+	events := []recordedKeyEvent{
+		{Timestamp: base, Key: "C-r"},
+		{Timestamp: base.Add(40 * time.Millisecond), Key: "e"},
+		{Timestamp: base.Add(80 * time.Millisecond), Key: "c"},
+		{Timestamp: base.Add(120 * time.Millisecond), Key: "h"},
+		{Timestamp: base.Add(160 * time.Millisecond), Key: "o"},
+		{Timestamp: base.Add(220 * time.Millisecond), Key: "Enter"},
+		{Timestamp: base.Add(400 * time.Millisecond), Key: "C-d"},
+	}
+	actions := recordTimedActionsFromKeyEvents(events, "")
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 key-macro actions, got %d", len(actions))
+	}
+	first := actions[0].Action
+	if first.Kind != "key-macro" {
+		t.Fatalf("first action kind = %q, want key-macro", first.Kind)
+	}
+	wantFirst := []string{"C-r", "e", "c", "h", "o", "Enter"}
+	if len(first.Keys) != len(wantFirst) {
+		t.Fatalf("first key count = %d, want %d", len(first.Keys), len(wantFirst))
+	}
+	for i, expected := range wantFirst {
+		if first.Keys[i].Key != expected {
+			t.Fatalf("first.Keys[%d] = %q, want %q", i, first.Keys[i].Key, expected)
+		}
+	}
+	if first.DelayMS == nil || *first.DelayMS != 500 {
+		t.Fatalf("first.DelayMS = %#v, want 500", first.DelayMS)
+	}
+	if first.Keys[0].DelayMS == nil || *first.Keys[0].DelayMS != 40 {
+		t.Fatalf("first.Keys[0].DelayMS = %#v, want 40", first.Keys[0].DelayMS)
+	}
+	second := actions[1].Action
+	if second.Kind != "key-macro" || len(second.Keys) != 1 || second.Keys[0].Key != "C-d" {
+		t.Fatalf("unexpected second action: %#v", second)
+	}
+	if second.DelayMS == nil || *second.DelayMS != 500 {
+		t.Fatalf("second.DelayMS = %#v, want 500", second.DelayMS)
 	}
 }

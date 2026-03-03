@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -19,6 +21,7 @@ import (
 	"github.com/dejanr/demo-it/internal/protocol"
 	"github.com/dejanr/demo-it/internal/runctx"
 	"github.com/dejanr/demo-it/internal/transcript"
+	"gopkg.in/yaml.v3"
 )
 
 var debugLogFile *os.File
@@ -118,6 +121,14 @@ func run() error {
 			return fmt.Errorf("start accepts at most one workspace path\n%s", usage)
 		}
 		return bootstrapWorkspace(workspacePath, *runID, *socketPath, true)
+	case "record":
+		return recordCommand(flag.Args()[1:])
+	case "__record-event":
+		return recordEventCommand(flag.Args()[1:])
+	case "__record-split-event":
+		return recordSplitEventCommand(flag.Args()[1:])
+	case "__record-shell":
+		return recordShellCommand(flag.Args()[1:])
 	case "trace-next":
 		return traceNextCommand(*runID, *socketPath)
 	}
@@ -512,6 +523,9 @@ func keyMacroAction(targetSession string, action transcript.Action) error {
 		return fmt.Errorf("key-macro action: %w", err)
 	}
 	debugf("key-macro target=%q steps=%d", targetPane, len(playback))
+	if action.DelayMS != nil && *action.DelayMS > 0 {
+		time.Sleep(time.Duration(*action.DelayMS) * time.Millisecond)
+	}
 
 	for i, step := range playback {
 		key := tmuxKey(step.Key)
@@ -529,6 +543,10 @@ func keyMacroAction(targetSession string, action transcript.Action) error {
 func keyMacroPlayback(action transcript.Action) ([]keyMacroPlaybackStep, error) {
 	if len(action.Keys) == 0 {
 		return nil, errors.New("requires at least one key")
+	}
+
+	if action.DelayMS != nil && *action.DelayMS < 0 {
+		return nil, errors.New("delay_ms must be >= 0")
 	}
 
 	defaultInterval := 80
@@ -1674,6 +1692,833 @@ func normalizeTraceForTextSnapshot(raw string) string {
 	return joined + "\n"
 }
 
+type recordEvent struct {
+	Timestamp time.Time `json:"ts"`
+	Kind      string    `json:"kind"`
+}
+
+func recordCommand(rawArgs []string) error {
+	fs := flag.NewFlagSet("record", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	title := fs.String("title", "Recorded interaction", "title for the generated demo-it block")
+	if err := fs.Parse(rawArgs); err != nil {
+		return err
+	}
+
+	workspacePath, err := resolveRecordWorkspacePath(fs.Args())
+	if err != nil {
+		return err
+	}
+
+	recordSession := runctx.SessionPrefix(workspacePath) + "-record"
+	exists, err := tmuxSessionExists(recordSession)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if err := runTmux("kill-session", "-t", recordSession); err != nil {
+			return fmt.Errorf("reset record session %q: %w", recordSession, err)
+		}
+	}
+
+	now := time.Now()
+	recordDir := filepath.Join(workspacePath, ".demo-it", "recordings", now.Format("20060102-150405"))
+	if err := os.MkdirAll(recordDir, 0o755); err != nil {
+		return fmt.Errorf("create record directory: %w", err)
+	}
+	eventsPath := filepath.Join(recordDir, "events.ndjson")
+	if err := os.WriteFile(eventsPath, nil, 0o644); err != nil {
+		return fmt.Errorf("create record events file: %w", err)
+	}
+	inputDir := filepath.Join(recordDir, "inputs")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		return fmt.Errorf("create record inputs directory: %w", err)
+	}
+
+	cliPath, err := resolveCLIPathForAutoNext()
+	if err != nil {
+		return err
+	}
+
+	scriptPath, err := exec.LookPath("script")
+	if err != nil {
+		return fmt.Errorf("record requires 'script' utility in PATH: %w", err)
+	}
+
+	if err := createRecordSession(recordSession, workspacePath, cliPath, scriptPath, eventsPath, inputDir); err != nil {
+		_ = runTmux("kill-session", "-t", recordSession)
+		return err
+	}
+	defer func() {
+		_ = runTmux("kill-session", "-t", recordSession)
+	}()
+
+	fmt.Fprintf(os.Stderr, "recording in tmux session %q\n", recordSession)
+	fmt.Fprintln(os.Stderr, "exit the recording shell (Ctrl-D) to finish and print the demo-it block")
+
+	if os.Getenv("TMUX") != "" {
+		if err := runTmux("switch-client", "-t", recordSession); err != nil && !isTmuxNoCurrentClientError(err) {
+			return err
+		}
+		if err := waitForSessionEnd(recordSession, 8*time.Hour); err != nil {
+			return err
+		}
+	} else {
+		if err := runTmuxWithStdio("attach-session", "-t", recordSession); err != nil {
+			return err
+		}
+		exists, err := tmuxSessionExists(recordSession)
+		if err != nil {
+			return err
+		}
+		if exists {
+			if err := runTmux("kill-session", "-t", recordSession); err != nil {
+				return fmt.Errorf("stop record session %q: %w", recordSession, err)
+			}
+		}
+	}
+
+	events, err := readRecordEvents(eventsPath)
+	if err != nil {
+		return err
+	}
+	semanticActions := recordedTimedActions(events)
+	inputActions, err := recordedInputTimedActions(inputDir)
+	if err != nil {
+		return err
+	}
+	actions := actionsFromTimed(mergeRecordedTimedActions(semanticActions, inputActions))
+	if len(actions) == 0 {
+		fmt.Fprintln(os.Stderr, "no pane-management or key actions were detected; emitting placeholder action block")
+	}
+	block, err := renderRecordedBlock(strings.TrimSpace(*title), actions)
+	if err != nil {
+		return err
+	}
+	fmt.Println(block)
+	return nil
+}
+
+func resolveRecordWorkspacePath(rawArgs []string) (string, error) {
+	workspacePath := ""
+	switch len(rawArgs) {
+	case 0:
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve current working directory: %w", err)
+		}
+		workspacePath = cwd
+	case 1:
+		workspacePath = rawArgs[0]
+	default:
+		return "", fmt.Errorf("record accepts at most one workspace path")
+	}
+
+	absolutePath, err := filepath.Abs(workspacePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace path: %w", err)
+	}
+	stat, err := os.Stat(absolutePath)
+	if err != nil {
+		return "", fmt.Errorf("workspace path: %w", err)
+	}
+	if !stat.IsDir() {
+		return "", fmt.Errorf("workspace path is not a directory: %s", absolutePath)
+	}
+	return absolutePath, nil
+}
+
+func createRecordSession(sessionName string, workspacePath string, cliPath string, scriptPath string, eventsPath string, inputDir string) error {
+	if err := runTmux("new-session", "-d", "-s", sessionName, "-c", workspacePath); err != nil {
+		return fmt.Errorf("create record tmux session %q: %w", sessionName, err)
+	}
+	if err := runTmux("set-option", "-t", sessionName, "-q", "@demo_it_record", "1"); err != nil {
+		return fmt.Errorf("mark record tmux session %q: %w", sessionName, err)
+	}
+	if err := runTmux("set-option", "-t", sessionName, "-q", "status", "off"); err != nil {
+		return fmt.Errorf("hide tmux status for %q: %w", sessionName, err)
+	}
+	if err := runTmux("set-environment", "-t", sessionName, "DEMO_IT_RECORD_EVENTS", eventsPath); err != nil {
+		return fmt.Errorf("set record events env for %q: %w", sessionName, err)
+	}
+	if err := runTmux("set-environment", "-t", sessionName, "DEMO_IT_RECORD_INPUT_DIR", inputDir); err != nil {
+		return fmt.Errorf("set record input dir env for %q: %w", sessionName, err)
+	}
+	if err := runTmux("set-environment", "-t", sessionName, "DEMO_IT_RECORD_SCRIPT_PATH", scriptPath); err != nil {
+		return fmt.Errorf("set record script path env for %q: %w", sessionName, err)
+	}
+	defaultCommand := fmt.Sprintf("%s __record-shell", shellQuote(cliPath))
+	if err := runTmux("set-option", "-t", sessionName, "-q", "default-command", defaultCommand); err != nil {
+		return fmt.Errorf("set record default command for %q: %w", sessionName, err)
+	}
+	if err := runTmux("respawn-pane", "-k", "-t", sessionName, cliPath, "__record-shell"); err != nil {
+		return fmt.Errorf("start record shell for %q: %w", sessionName, err)
+	}
+
+	splitPaneHookCmd := fmt.Sprintf("run-shell %s", shellQuote(recordSplitEventShellCommand(cliPath, eventsPath)))
+	if err := runTmux("set-hook", "-t", sessionName, "after-split-window", splitPaneHookCmd); err != nil {
+		return fmt.Errorf("set record split-pane hook: %w", err)
+	}
+	killPaneHookCmd := fmt.Sprintf("run-shell %s", shellQuote(recordEventShellCommand(cliPath, eventsPath, "kill-pane")))
+	if err := runTmux("set-hook", "-t", sessionName, "after-kill-pane", killPaneHookCmd); err != nil {
+		return fmt.Errorf("set record kill-pane hook: %w", err)
+	}
+	return nil
+}
+
+func recordEventShellCommand(cliPath string, eventsPath string, kind string) string {
+	return fmt.Sprintf("%s __record-event --events %s --kind %s", shellQuote(cliPath), shellQuote(eventsPath), shellQuote(kind))
+}
+
+func recordSplitEventShellCommand(cliPath string, eventsPath string) string {
+	return fmt.Sprintf("%s __record-split-event --events %s --hook-args \"#{hook_arguments}\"", shellQuote(cliPath), shellQuote(eventsPath))
+}
+
+func waitForSessionEnd(sessionName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		exists, err := tmuxSessionExists(sessionName)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("recording timed out waiting for tmux session %q to end", sessionName)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func recordEventCommand(rawArgs []string) error {
+	fs := flag.NewFlagSet("__record-event", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	eventsPath := fs.String("events", "", "events log path")
+	kind := fs.String("kind", "", "recorded event kind")
+	if err := fs.Parse(rawArgs); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return errors.New("__record-event does not accept positional arguments")
+	}
+
+	resolvedPath, err := resolveRecordEventsPath(strings.TrimSpace(*eventsPath), "__record-event")
+	if err != nil {
+		return err
+	}
+	resolvedKind := strings.TrimSpace(*kind)
+	if !isRecordEventKind(resolvedKind) {
+		return fmt.Errorf("unsupported record event kind %q", resolvedKind)
+	}
+	return appendRecordEvent(resolvedPath, resolvedKind)
+}
+
+func recordSplitEventCommand(rawArgs []string) error {
+	fs := flag.NewFlagSet("__record-split-event", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	eventsPath := fs.String("events", "", "events log path")
+	hookArgs := fs.String("hook-args", "", "tmux hook arguments")
+	if err := fs.Parse(rawArgs); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return errors.New("__record-split-event does not accept positional arguments")
+	}
+
+	resolvedPath, err := resolveRecordEventsPath(strings.TrimSpace(*eventsPath), "__record-split-event")
+	if err != nil {
+		return err
+	}
+	kind := recordSplitKindFromHookArguments(strings.TrimSpace(*hookArgs))
+	return appendRecordEvent(resolvedPath, kind)
+}
+
+func recordShellCommand(rawArgs []string) error {
+	fs := flag.NewFlagSet("__record-shell", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	paneID := fs.String("pane-id", "", "tmux pane id")
+	paneIndex := fs.String("pane-index", "", "tmux pane index")
+	if err := fs.Parse(rawArgs); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return errors.New("__record-shell does not accept positional arguments")
+	}
+
+	inputDir := strings.TrimSpace(os.Getenv("DEMO_IT_RECORD_INPUT_DIR"))
+	if inputDir == "" {
+		return errors.New("missing DEMO_IT_RECORD_INPUT_DIR for __record-shell")
+	}
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		return fmt.Errorf("create input dir for __record-shell: %w", err)
+	}
+
+	resolvedPaneID := strings.TrimSpace(*paneID)
+	if resolvedPaneID == "" {
+		resolvedPaneID = strings.TrimSpace(os.Getenv("TMUX_PANE"))
+	}
+	resolvedPaneIndex := strings.TrimSpace(*paneIndex)
+	if resolvedPaneIndex == "" {
+		resolvedPaneIndex = "unknown"
+	}
+
+	paneLabel := recordPaneLogLabel(resolvedPaneID, resolvedPaneIndex)
+	inputPath := filepath.Join(inputDir, paneLabel+".in.log")
+	timingPath := filepath.Join(inputDir, paneLabel+".timing.log")
+	startPath := filepath.Join(inputDir, paneLabel+".start")
+	if err := os.WriteFile(startPath, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0o644); err != nil {
+		return fmt.Errorf("write record shell start time: %w", err)
+	}
+
+	shellPath := strings.TrimSpace(os.Getenv("SHELL"))
+	if shellPath == "" {
+		shellPath = "/bin/sh"
+	}
+	scriptBin := strings.TrimSpace(os.Getenv("DEMO_IT_RECORD_SCRIPT_PATH"))
+	if scriptBin == "" {
+		resolvedScript, err := exec.LookPath("script")
+		if err != nil {
+			return fmt.Errorf("resolve script for __record-shell: %w", err)
+		}
+		scriptBin = resolvedScript
+	}
+	scriptCommand := shellPath + " -i"
+	cmd := exec.Command(scriptBin, "-q", "-f", "-e", "--log-in", inputPath, "--log-out", "/dev/null", "--log-timing", timingPath, "--command", scriptCommand)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("record shell command: %w", err)
+	}
+	return nil
+}
+
+func recordPaneLogLabel(paneID string, paneIndex string) string {
+	indexLabel := sanitizeRecordLogPart(paneIndex)
+	if indexLabel == "" {
+		indexLabel = "unknown"
+	}
+	idLabel := sanitizeRecordLogPart(strings.TrimPrefix(paneID, "%"))
+	if idLabel == "" {
+		idLabel = "unknown"
+	}
+	return fmt.Sprintf("pane-%s-%s", indexLabel, idLabel)
+}
+
+func sanitizeRecordLogPart(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	builder := strings.Builder{}
+	for _, r := range trimmed {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
+}
+
+func resolveRecordEventsPath(pathValue string, commandName string) (string, error) {
+	resolvedPath := strings.TrimSpace(pathValue)
+	if resolvedPath == "" {
+		resolvedPath = strings.TrimSpace(os.Getenv("DEMO_IT_RECORD_EVENTS"))
+	}
+	if resolvedPath == "" {
+		return "", fmt.Errorf("missing --events for %s", commandName)
+	}
+	return resolvedPath, nil
+}
+
+func appendRecordEvent(eventsPath string, kind string) error {
+	event := recordEvent{Timestamp: time.Now().UTC(), Kind: kind}
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("encode record event: %w", err)
+	}
+
+	file, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open record events log %q: %w", eventsPath, err)
+	}
+	defer file.Close()
+	if _, err := file.Write(append(payload, '\n')); err != nil {
+		return fmt.Errorf("append record event: %w", err)
+	}
+	return nil
+}
+
+func recordSplitKindFromHookArguments(hookArgs string) string {
+	withPad := " " + strings.TrimSpace(hookArgs) + " "
+	if strings.Contains(withPad, " -v ") {
+		return "split-pane-vertical"
+	}
+	if strings.Contains(withPad, " -h ") {
+		return "split-pane"
+	}
+	return "split-pane"
+}
+
+func isRecordEventKind(kind string) bool {
+	switch kind {
+	case "split-pane", "split-pane-vertical", "kill-pane", "killall-pane":
+		return true
+	default:
+		return false
+	}
+}
+
+func readRecordEvents(eventsPath string) ([]recordEvent, error) {
+	file, err := os.Open(eventsPath)
+	if err != nil {
+		return nil, fmt.Errorf("read record events %q: %w", eventsPath, err)
+	}
+	defer file.Close()
+
+	events := make([]recordEvent, 0)
+	scanner := bufio.NewScanner(file)
+	line := 0
+	for scanner.Scan() {
+		line++
+		raw := strings.TrimSpace(scanner.Text())
+		if raw == "" {
+			continue
+		}
+		var event recordEvent
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return nil, fmt.Errorf("decode record event at line %d: %w", line, err)
+		}
+		events = append(events, event)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan record events: %w", err)
+	}
+	return events, nil
+}
+
+type timedRecordedAction struct {
+	Timestamp time.Time
+	Sequence  int
+	Action    transcript.Action
+}
+
+type recordInputChunk struct {
+	Timestamp time.Time
+	Length    int
+}
+
+type recordedKeyEvent struct {
+	Timestamp time.Time
+	Key       string
+}
+
+func recordedTimedActions(events []recordEvent) []timedRecordedAction {
+	actions := make([]timedRecordedAction, 0)
+	sequence := 0
+	for i := 0; i < len(events); i++ {
+		event := events[i]
+		switch event.Kind {
+		case "split-pane":
+			actions = append(actions, timedRecordedAction{Timestamp: event.Timestamp, Sequence: sequence, Action: transcript.Action{Kind: "split-pane"}})
+			sequence++
+		case "split-pane-vertical":
+			actions = append(actions, timedRecordedAction{Timestamp: event.Timestamp, Sequence: sequence, Action: transcript.Action{Kind: "split-pane-vertical"}})
+			sequence++
+		case "killall-pane":
+			actions = append(actions, timedRecordedAction{Timestamp: event.Timestamp, Sequence: sequence, Action: transcript.Action{Kind: "killall-pane"}})
+			sequence++
+		case "kill-pane":
+			count := 1
+			for i+1 < len(events) && events[i+1].Kind == "kill-pane" {
+				count++
+				i++
+			}
+			kind := "kill-pane"
+			if count > 1 {
+				kind = "killall-pane"
+			}
+			actions = append(actions, timedRecordedAction{Timestamp: event.Timestamp, Sequence: sequence, Action: transcript.Action{Kind: kind}})
+			sequence++
+		}
+	}
+	return actions
+}
+
+func recordedActions(events []recordEvent) []transcript.Action {
+	return actionsFromTimed(recordedTimedActions(events))
+}
+
+func recordedInputTimedActions(inputDir string) ([]timedRecordedAction, error) {
+	entries, err := os.ReadDir(inputDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read record input dir %q: %w", inputDir, err)
+	}
+
+	actions := make([]timedRecordedAction, 0)
+	sequence := 100000
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".timing.log") {
+			continue
+		}
+
+		timingPath := filepath.Join(inputDir, name)
+		inputPath := filepath.Join(inputDir, strings.TrimSuffix(name, ".timing.log")+".in.log")
+		paneSelector := recordPaneSelectorFromLogName(name)
+		chunkActions, err := recordedInputActionsForPane(inputPath, timingPath, paneSelector)
+		if err != nil {
+			return nil, err
+		}
+		for i := range chunkActions {
+			chunkActions[i].Sequence = sequence
+			sequence++
+			actions = append(actions, chunkActions[i])
+		}
+	}
+	return actions, nil
+}
+
+func recordedInputActionsForPane(inputPath string, timingPath string, paneSelector string) ([]timedRecordedAction, error) {
+	startOverride, err := readRecordedInputStartOverride(timingPath)
+	if err != nil {
+		return nil, err
+	}
+	chunks, totalLength, err := parseRecordInputTiming(timingPath, startOverride)
+	if err != nil {
+		return nil, err
+	}
+	if totalLength == 0 {
+		return nil, nil
+	}
+
+	rawInput, err := os.ReadFile(inputPath)
+	if err != nil {
+		return nil, fmt.Errorf("read record input log %q: %w", inputPath, err)
+	}
+	payload, err := extractRecordInputPayload(rawInput, totalLength)
+	if err != nil {
+		return nil, fmt.Errorf("extract input payload from %q: %w", inputPath, err)
+	}
+
+	keyEvents := make([]recordedKeyEvent, 0)
+	offset := 0
+	for _, chunk := range chunks {
+		if chunk.Length <= 0 {
+			continue
+		}
+		if offset+chunk.Length > len(payload) {
+			return nil, fmt.Errorf("input payload is shorter than timing chunk lengths in %q", timingPath)
+		}
+		chunkData := payload[offset : offset+chunk.Length]
+		offset += chunk.Length
+		keyEvents = append(keyEvents, recordedKeyEventsFromInputChunk(chunkData, chunk.Timestamp)...)
+	}
+	return recordTimedActionsFromKeyEvents(keyEvents, paneSelector), nil
+}
+
+func readRecordedInputStartOverride(timingPath string) (*time.Time, error) {
+	startPath := strings.TrimSuffix(timingPath, ".timing.log") + ".start"
+	bytes, err := os.ReadFile(startPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read record start time %q: %w", startPath, err)
+	}
+	value := strings.TrimSpace(string(bytes))
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return nil, fmt.Errorf("parse record start time %q: %w", startPath, err)
+	}
+	return &parsed, nil
+}
+
+func parseRecordInputTiming(timingPath string, startOverride *time.Time) ([]recordInputChunk, int, error) {
+	file, err := os.Open(timingPath)
+	if err != nil {
+		return nil, 0, fmt.Errorf("read record timing log %q: %w", timingPath, err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	startTime := time.Time{}
+	if startOverride != nil {
+		startTime = (*startOverride).UTC()
+	}
+	elapsed := time.Duration(0)
+	chunks := make([]recordInputChunk, 0)
+	totalLength := 0
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+
+		recordType := parts[0]
+		if startTime.IsZero() && recordType == "H" && len(parts) >= 5 && parts[2] == "START_TIME" {
+			value := parts[3] + " " + parts[4]
+			parsed, err := time.Parse("2006-01-02 15:04:05-07:00", value)
+			if err == nil {
+				startTime = parsed
+			}
+		}
+
+		deltaSeconds, err := strconv.ParseFloat(parts[1], 64)
+		if err == nil {
+			elapsed += time.Duration(deltaSeconds * float64(time.Second))
+		}
+
+		if recordType != "I" || startTime.IsZero() || len(parts) < 3 {
+			continue
+		}
+		length, err := strconv.Atoi(parts[2])
+		if err != nil || length <= 0 {
+			continue
+		}
+		chunks = append(chunks, recordInputChunk{Timestamp: startTime.Add(elapsed), Length: length})
+		totalLength += length
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, 0, fmt.Errorf("scan timing log %q: %w", timingPath, err)
+	}
+	if startTime.IsZero() {
+		return nil, 0, fmt.Errorf("timing log %q is missing START_TIME", timingPath)
+	}
+	return chunks, totalLength, nil
+}
+
+func extractRecordInputPayload(rawInput []byte, totalLength int) ([]byte, error) {
+	if totalLength <= 0 {
+		return nil, nil
+	}
+	lineEnd := bytes.IndexByte(rawInput, '\n')
+	if lineEnd < 0 {
+		return nil, errors.New("missing script header line")
+	}
+	start := lineEnd + 1
+	end := start + totalLength
+	if end > len(rawInput) {
+		return nil, errors.New("script input log is shorter than declared timing length")
+	}
+	payload := make([]byte, totalLength)
+	copy(payload, rawInput[start:end])
+	return payload, nil
+}
+
+func recordActionsFromInputChunk(data []byte, timestamp time.Time, paneSelector string) []timedRecordedAction {
+	events := recordedKeyEventsFromInputChunk(data, timestamp)
+	return recordTimedActionsFromKeyEvents(events, paneSelector)
+}
+
+func recordedKeyEventsFromInputChunk(data []byte, timestamp time.Time) []recordedKeyEvent {
+	events := make([]recordedKeyEvent, 0, len(data))
+	appendKey := func(value string) {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			return
+		}
+		events = append(events, recordedKeyEvent{Timestamp: timestamp, Key: trimmed})
+	}
+
+	for i := 0; i < len(data); {
+		value := data[i]
+		if value == '\r' || value == '\n' {
+			appendKey("Enter")
+			if value == '\r' && i+1 < len(data) && data[i+1] == '\n' {
+				i += 2
+				continue
+			}
+			i++
+			continue
+		}
+		if value == '\t' {
+			appendKey("Tab")
+			i++
+			continue
+		}
+		if value == 0x7f || value == 0x08 {
+			appendKey("BSpace")
+			i++
+			continue
+		}
+		if value == 0x1b {
+			if i+2 < len(data) && data[i+1] == '[' {
+				switch data[i+2] {
+				case 'A':
+					appendKey("Up")
+					i += 3
+					continue
+				case 'B':
+					appendKey("Down")
+					i += 3
+					continue
+				case 'C':
+					appendKey("Right")
+					i += 3
+					continue
+				case 'D':
+					appendKey("Left")
+					i += 3
+					continue
+				}
+			}
+			appendKey("Escape")
+			i++
+			continue
+		}
+		if value < 32 {
+			if value >= 1 && value <= 26 {
+				appendKey("C-" + string(rune('a'-1+value)))
+			}
+			i++
+			continue
+		}
+		if value == ' ' {
+			appendKey("Space")
+			i++
+			continue
+		}
+		appendKey(string([]byte{value}))
+		i++
+	}
+	return events
+}
+
+func recordTimedActionsFromKeyEvents(events []recordedKeyEvent, paneSelector string) []timedRecordedAction {
+	if len(events) == 0 {
+		return nil
+	}
+
+	actions := make([]timedRecordedAction, 0)
+	current := make([]recordedKeyEvent, 0)
+	flush := func() {
+		if len(current) == 0 {
+			return
+		}
+		startDelay := 500
+		action := transcript.Action{Kind: "key-macro", DelayMS: &startDelay, Keys: macroKeysFromEvents(current)}
+		if paneSelector != "" {
+			action.Pane = paneSelector
+		}
+		actions = append(actions, timedRecordedAction{Timestamp: current[0].Timestamp, Action: action})
+		current = current[:0]
+	}
+
+	for _, event := range events {
+		current = append(current, event)
+		if event.Key == "Enter" {
+			flush()
+		}
+	}
+	flush()
+	return actions
+}
+
+func macroKeysFromEvents(events []recordedKeyEvent) []transcript.KeyMacroKey {
+	keys := make([]transcript.KeyMacroKey, 0, len(events))
+	for i, event := range events {
+		macroKey := transcript.KeyMacroKey{Key: event.Key}
+		if i+1 < len(events) {
+			delta := events[i+1].Timestamp.Sub(event.Timestamp)
+			if delta > 0 {
+				delayMS := int(delta / time.Millisecond)
+				if delayMS > 0 {
+					delay := delayMS
+					macroKey.DelayMS = &delay
+				}
+			}
+		}
+		keys = append(keys, macroKey)
+	}
+	return keys
+}
+
+func recordPaneSelectorFromLogName(name string) string {
+	trimmed := strings.TrimSuffix(name, ".timing.log")
+	if !strings.HasPrefix(trimmed, "pane-") {
+		return ""
+	}
+	parts := strings.Split(trimmed, "-")
+	if len(parts) < 3 {
+		return ""
+	}
+	indexValue := parts[1]
+	if indexValue == "0" {
+		return ""
+	}
+	if _, err := strconv.Atoi(indexValue); err != nil {
+		return ""
+	}
+	return indexValue
+}
+
+func mergeRecordedTimedActions(left []timedRecordedAction, right []timedRecordedAction) []timedRecordedAction {
+	merged := make([]timedRecordedAction, 0, len(left)+len(right))
+	merged = append(merged, left...)
+	merged = append(merged, right...)
+	sort.SliceStable(merged, func(i, j int) bool {
+		leftTime := merged[i].Timestamp
+		rightTime := merged[j].Timestamp
+		if leftTime.IsZero() && rightTime.IsZero() {
+			return merged[i].Sequence < merged[j].Sequence
+		}
+		if leftTime.IsZero() {
+			return false
+		}
+		if rightTime.IsZero() {
+			return true
+		}
+		if leftTime.Equal(rightTime) {
+			return merged[i].Sequence < merged[j].Sequence
+		}
+		return leftTime.Before(rightTime)
+	})
+	return merged
+}
+
+func actionsFromTimed(timed []timedRecordedAction) []transcript.Action {
+	actions := make([]transcript.Action, 0, len(timed))
+	for _, item := range timed {
+		actions = append(actions, item.Action)
+	}
+	return actions
+}
+
+func renderRecordedBlock(title string, actions []transcript.Action) (string, error) {
+	trimmedTitle := strings.TrimSpace(title)
+	if trimmedTitle == "" {
+		trimmedTitle = "Recorded interaction"
+	}
+	if len(actions) == 0 {
+		actions = []transcript.Action{{Kind: "insert-text", Text: "# TODO: add recorded terminal actions"}}
+	}
+
+	step := transcript.Step{
+		Title:        trimmedTitle,
+		Actions:      actions,
+		SpeakerNotes: "TODO: add speaker notes.",
+	}
+	payload, err := yaml.Marshal(step)
+	if err != nil {
+		return "", fmt.Errorf("encode recorded block: %w", err)
+	}
+	return "```demo-it\n" + strings.TrimSpace(string(payload)) + "\n```", nil
+}
+
 func killSessionsCommand(rawArgs []string) error {
 	workspaces, err := listManagedWorkspaces()
 	if err != nil {
@@ -1907,6 +2752,11 @@ func isTmuxNoServerError(err error) bool {
 	return strings.Contains(message, "no server running") || strings.Contains(message, "failed to connect to server")
 }
 
+func isTmuxNoCurrentClientError(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "no current client")
+}
+
 func tmuxSessionExists(name string) (bool, error) {
 	cmd := exec.Command("tmux", "has-session", "-t", name)
 	if err := cmd.Run(); err != nil {
@@ -2073,6 +2923,7 @@ const usage = `Usage:
 
 Commands:
   start [workspace-path]
+  record [--title <text>] [workspace-path]
   status
   run-status
   reload
@@ -2091,6 +2942,10 @@ Start behavior:
   start <workspace-path> bootstraps that workspace.
   start requires <workspace>/demo-it.md.
 
+Record behavior:
+  record (without a path) records tmux actions in the current working directory.
+  record uses a <workspace>-record session and prints a demo-it block on stop.
+
 Workspace mode:
   Passing a workspace path directly is equivalent to start <workspace-path>.
 
@@ -2100,5 +2955,6 @@ Session lifecycle:
   demo-it notes              # open notes session for active workspace
   demo-it show               # open demo session for active workspace
   demo-it trace-next         # trace active demo pane output while running next
+  demo-it record --title T   # open <workspace>-record and print recorded block when shell exits
   demo-it kill               # kill managed sessions
 `

@@ -21,6 +21,7 @@ type Action struct {
 	Direction  string        `yaml:"direction,omitempty"`
 	Path       string        `yaml:"path,omitempty"`
 	Pane       string        `yaml:"pane,omitempty"`
+	DelayMS    *int          `yaml:"delay_ms,omitempty"`
 	IntervalMS *int          `yaml:"interval_ms,omitempty"`
 	Keys       []KeyMacroKey `yaml:"keys,omitempty"`
 }
@@ -152,6 +153,9 @@ func decodeStep(raw string, line int) (Step, error) {
 				return Step{}, fmt.Errorf("demo-it block at line %d: open-slide requires path", line)
 			}
 		case "key-macro":
+			if action.DelayMS != nil && *action.DelayMS < 0 {
+				return Step{}, fmt.Errorf("demo-it block at line %d: key-macro delay_ms must be >= 0", line)
+			}
 			if action.IntervalMS != nil && *action.IntervalMS < 0 {
 				return Step{}, fmt.Errorf("demo-it block at line %d: key-macro interval_ms must be >= 0", line)
 			}

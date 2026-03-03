@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -217,6 +218,34 @@ func (h *e2eHarness) mustRunTmuxOutput(t *testing.T, args ...string) string {
 		t.Fatalf("tmux %v failed: %v\n%s", args, err, string(output))
 	}
 	return string(output)
+}
+
+func (h *e2eHarness) runTmuxNoFail(args ...string) error {
+	_, err := h.tmuxOutput(args...)
+	return err
+}
+
+func (h *e2eHarness) tmuxOutput(args ...string) (string, error) {
+	cmd := exec.Command(h.tmuxCmd, args...)
+	cmd.Env = h.env
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("tmux %v failed: %w: %s", args, err, strings.TrimSpace(string(output)))
+	}
+	return string(output), nil
+}
+
+func (h *e2eHarness) tmuxSessionExists(sessionName string) (bool, error) {
+	cmd := exec.Command(h.tmuxCmd, "has-session", "-t", sessionName)
+	cmd.Env = h.env
+	if output, err := cmd.CombinedOutput(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("tmux has-session %q failed: %w: %s", sessionName, err, strings.TrimSpace(string(output)))
+	}
+	return true, nil
 }
 
 func startDaemonForTest(t *testing.T, socketPath string) {

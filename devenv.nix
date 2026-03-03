@@ -62,7 +62,7 @@
     '';
 
     tests.exec = "go test ./...";
-    tests-e2e.exec = "go test -tags=e2e ./cmd/demo-it/tests";
+    tests-e2e.exec = "go test -tags=e2e ./test/e2e";
 
     build.exec = ''
       mkdir -p bin

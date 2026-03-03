@@ -1,0 +1,23 @@
+```demo-it
+title: Recorded interaction
+actions:
+    - kind: key-macro
+      delay_ms: 500
+      keys:
+        - key: e
+        - key: c
+        - key: h
+        - key: o
+        - key: Space
+        - key: h
+        - key: e
+        - key: l
+        - key: l
+        - key: o
+        - key: Enter
+    - kind: key-macro
+      delay_ms: 500
+      keys:
+        - key: C-d
+speaker_notes: 'TODO: add speaker notes.'
+```

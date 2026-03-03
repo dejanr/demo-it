@@ -85,6 +85,12 @@ demo-it start ./examples/tmux-splits
 demo-it start ./examples/no-slides
 ```
 
+Use `record` to open an isolated `<workspace>-record` tmux session and emit a `demo-it` block from captured pane-management actions and typed keys:
+
+```bash
+demo-it record --title "Recorded split flow"
+```
+
 Path mode is still supported and is equivalent to `demo-it start <workspace-path>`:
 
 ```bash
@@ -107,8 +113,11 @@ Session utilities:
 - `demo-it notes` opens the notes session for the active workspace
 - `demo-it show` opens the demo session for the active workspace
 - `demo-it trace-next` traces active demo-pane output while executing `next` and writes `.demo-it/traces/*.log` plus normalized `.txt` snapshots
+- `demo-it record [--title <text>] [workspace-path]` opens `<workspace>-record`, captures tmux pane actions plus typed shell keys, and prints a `demo-it` block when recording shell exits
 - `demo-it kill` kills managed demo-it tmux sessions
 - inside managed demo-it tmux sessions, `C-s` then `n` runs `demo-it next`, and `C-s` then `p` runs `demo-it prev`
+
+Inside a `-record` session, semantic hooks capture pane operations: `split-window -h` (or prefix + `%`) records `split-pane`, `split-window -v` (or prefix + `"`) records `split-pane-vertical`, and `kill-pane` operations are captured and collapsed into `killall-pane` when multiple kills happen back-to-back. Pane shells run through an input logger so typed commands/keys are emitted as `key-macro` actions; recorder groups keys into one macro sequence and closes that sequence on `Enter` (remaining keys continue in the next macro). Each generated key-macro now starts with action-level `delay_ms: 500`, and timing between captured input events is emitted as per-key `delay_ms` when available. Exit the recording shell (`Ctrl-D`) to stop and print the generated block.
 
 For action-level debugging, set `DEMO_IT_DEBUG_LOG` to a file path before running commands:
 
