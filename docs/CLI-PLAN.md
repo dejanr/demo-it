@@ -38,6 +38,7 @@ Neovim scope is intentionally small:
 - `demo-it rerun`
 - `demo-it jump --slide <id|index>`
 - `demo-it focus --policy <present|return|none>`
+- `demo-it record [--title <text>] [workspace-path]`
 
 ## State and context boundaries
 

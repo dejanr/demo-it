@@ -91,6 +91,32 @@ Use `record` to open an isolated `<workspace>-record` tmux session and emit a `d
 demo-it record --title "Recorded split flow"
 ```
 
+### Recording authoring mode (`demo-it record`)
+
+`record` is intended for authoring `demo-it.md` blocks from short live tmux interactions.
+
+- starts an isolated `<workspace>-record` session
+- captures pane semantics via tmux hooks (`split-pane`, `split-pane-vertical`, `kill-pane`/`killall-pane`)
+- captures typed shell input as `key-macro` actions
+- groups key streams into one macro until `Enter` (then starts a new macro)
+- applies action-level `delay_ms: 500` at the start of each generated macro and preserves per-key `delay_ms` when timing is available
+- finishes when recording shells exit (`Ctrl-D`) and prints a fenced `demo-it` block to stdout
+
+Example generated action shape:
+
+```yaml
+- kind: key-macro
+  delay_ms: 500
+  keys:
+    - key: C-r
+      delay_ms: 240
+    - key: e
+    - key: c
+    - key: h
+    - key: o
+    - key: Enter
+```
+
 Path mode is still supported and is equivalent to `demo-it start <workspace-path>`:
 
 ```bash
@@ -117,7 +143,7 @@ Session utilities:
 - `demo-it kill` kills managed demo-it tmux sessions
 - inside managed demo-it tmux sessions, `C-s` then `n` runs `demo-it next`, and `C-s` then `p` runs `demo-it prev`
 
-Inside a `-record` session, semantic hooks capture pane operations: `split-window -h` (or prefix + `%`) records `split-pane`, `split-window -v` (or prefix + `"`) records `split-pane-vertical`, and `kill-pane` operations are captured and collapsed into `killall-pane` when multiple kills happen back-to-back. Pane shells run through an input logger so typed commands/keys are emitted as `key-macro` actions; recorder groups keys into one macro sequence and closes that sequence on `Enter` (remaining keys continue in the next macro). Each generated key-macro now starts with action-level `delay_ms: 500`, and timing between captured input events is emitted as per-key `delay_ms` when available. Exit the recording shell (`Ctrl-D`) to stop and print the generated block.
+Inside a `-record` session, you can drive normal tmux/shell workflows (including `split-window -h` / `split-window -v`) and then exit with `Ctrl-D`; `record` will print a generated block you can paste into `demo-it.md`.
 
 For action-level debugging, set `DEMO_IT_DEBUG_LOG` to a file path before running commands:
 
@@ -141,6 +167,8 @@ Snapshot coverage for this flow is available via:
 
 ```bash
 tests-e2e
+# equivalent:
+go test -tags=e2e ./test/e2e
 ```
 
 For local development, you can force tmux keybindings to use a specific binary via `DEMO_IT_PATH` on `start`:

@@ -158,6 +158,12 @@ No command-specific arguments currently used.
 Current `demo-it` blocks use `title`, `actions` (or `slide` shorthand), and optional `speaker_notes`.
 Titles are required and must be unique within a `demo-it.md` transcript.
 
+`key-macro` actions currently support:
+
+- action-level `delay_ms` (delay before macro playback starts)
+- `interval_ms` (default delay between keys)
+- per-key `keys[].delay_ms` overrides
+
 ## Error codes
 
 Current error code mapping:
