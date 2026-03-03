@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,15 +60,78 @@ func TestE2ERecordSplitRightAndDoubleCtrlDSnapshot(t *testing.T) {
 	assertSnapshot(t, "record-split-right-double-ctrl-d.golden", record.stdout.String())
 }
 
-func startRecordProcess(t *testing.T, h *e2eHarness, workspace string) *asyncRecordProcess {
+func TestE2ERecordStdoutCanBeRedirectedToFile(t *testing.T) {
+	h := newE2EHarness(t)
+	workspace := t.TempDir()
+	sessionName := runctx.SessionPrefix(workspace) + "-record"
+	outputPath := filepath.Join(workspace, "redirected.md")
+	outputFile, err := os.Create(outputPath)
+	if err != nil {
+		t.Fatalf("create redirected output file: %v", err)
+	}
+	t.Cleanup(func() { _ = outputFile.Close() })
+
+	record := startRecordProcessWithOutput(t, h, outputFile, workspace)
+	waitForRecordSessionReady(t, h, sessionName, 4*time.Second)
+
+	h.mustRunTmux(t, "send-keys", "-t", sessionName, "echo hello", "Enter")
+	time.Sleep(250 * time.Millisecond)
+	h.mustRunTmux(t, "send-keys", "-t", sessionName, "C-d")
+
+	waitForRecordProcess(t, h, sessionName, record, 6*time.Second)
+	if err := outputFile.Close(); err != nil {
+		t.Fatalf("close redirected output file: %v", err)
+	}
+
+	contents, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read redirected output: %v", err)
+	}
+	assertSnapshot(t, "record-echo-hello.golden", string(contents))
+}
+
+func TestE2ERecordWritesOutputFileFlag(t *testing.T) {
+	h := newE2EHarness(t)
+	workspace := t.TempDir()
+	sessionName := runctx.SessionPrefix(workspace) + "-record"
+	outputPath := filepath.Join(workspace, "via-flag.md")
+
+	record := startRecordProcess(t, h, "-f", outputPath, workspace)
+	waitForRecordSessionReady(t, h, sessionName, 4*time.Second)
+
+	h.mustRunTmux(t, "send-keys", "-t", sessionName, "echo hello", "Enter")
+	time.Sleep(250 * time.Millisecond)
+	h.mustRunTmux(t, "send-keys", "-t", sessionName, "C-d")
+
+	waitForRecordProcess(t, h, sessionName, record, 6*time.Second)
+	if got := strings.TrimSpace(record.stdout.String()); got != "" {
+		t.Fatalf("expected no stdout when -f is used, got %q", got)
+	}
+
+	contents, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read -f output: %v", err)
+	}
+	assertSnapshot(t, "record-echo-hello.golden", string(contents))
+}
+
+func startRecordProcess(t *testing.T, h *e2eHarness, args ...string) *asyncRecordProcess {
+	return startRecordProcessWithOutput(t, h, nil, args...)
+}
+
+func startRecordProcessWithOutput(t *testing.T, h *e2eHarness, stdout io.Writer, args ...string) *asyncRecordProcess {
 	t.Helper()
-	args := []string{"--run-id", h.runID, "--socket", h.socketPath, "record", workspace}
-	cmd := exec.Command(h.cliPath, args...)
+	cliArgs := append([]string{"--run-id", h.runID, "--socket", h.socketPath, "record", "--yes"}, args...)
+	cmd := exec.Command(h.cliPath, cliArgs...)
 	cmd.Dir = h.repoRoot
 	cmd.Env = setEnv(h.env, "TMUX", "1")
 
 	process := &asyncRecordProcess{cmd: cmd, done: make(chan error, 1)}
-	cmd.Stdout = &process.stdout
+	if stdout != nil {
+		cmd.Stdout = stdout
+	} else {
+		cmd.Stdout = &process.stdout
+	}
 	cmd.Stderr = &process.stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start record command: %v", err)

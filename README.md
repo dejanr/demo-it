@@ -92,6 +92,8 @@ Use `record` to open an isolated `<workspace>-record` tmux session and emit a `d
 
 ```bash
 demo-it record --title "Recorded split flow"
+demo-it record --yes > test.md
+demo-it record --yes -f test.md
 ```
 
 ### Recording authoring mode (`demo-it record`)
@@ -99,11 +101,12 @@ demo-it record --title "Recorded split flow"
 `record` is intended for authoring `demo-it.md` blocks from short live tmux interactions.
 
 - starts an isolated `<workspace>-record` session
+- asks for Enter confirmation before handoff to the record session (`--yes` / `-y` skips this)
 - captures pane semantics via tmux hooks (`split-pane`, `split-pane-vertical`, `kill-pane`/`killall-pane`)
 - captures typed shell input as `key-macro` actions
 - groups key streams into one macro until `Enter` (then starts a new macro)
 - applies action-level `delay_ms: 500` at the start of each generated macro and preserves per-key `delay_ms` when timing is available
-- finishes when recording shells exit (`Ctrl-D`) and prints a fenced `demo-it` block to stdout
+- finishes when recording shells exit (`Ctrl-D`) and prints a fenced `demo-it` block to stdout (or writes it with `-f <file.md>`)
 
 Example generated action shape:
 
@@ -143,11 +146,11 @@ Session utilities:
 - `demo-it notes` opens the notes session for the active workspace
 - `demo-it show` opens the demo session for the active workspace
 - `demo-it trace-next` traces active demo-pane output while executing `next` and writes `.demo-it/traces/*.log` plus normalized `.txt` snapshots
-- `demo-it record [--title <text>] [workspace-path]` opens `<workspace>-record`, captures tmux pane actions plus typed shell keys, and prints a `demo-it` block when recording shell exits
+- `demo-it record [--title <text>] [--yes] [-f <file.md>] [workspace-path]` opens `<workspace>-record`, captures tmux pane actions plus typed shell keys, and emits a `demo-it` block when recording shell exits
 - `demo-it kill` kills managed demo-it tmux sessions
 - inside managed demo-it tmux sessions, `C-s` then `n` runs `demo-it next`, and `C-s` then `p` runs `demo-it prev`
 
-Inside a `-record` session, you can drive normal tmux/shell workflows (including `split-window -h` / `split-window -v`) and then exit with `Ctrl-D`; `record` will print a generated block you can paste into `demo-it.md`.
+Inside a `-record` session, you can drive normal tmux/shell workflows (including `split-window -h` / `split-window -v`) and then exit with `Ctrl-D`; `record` will print a generated block you can paste into `demo-it.md`, or write it directly via `-f` (use `--yes` to skip the handoff confirmation prompt).
 
 For action-level debugging, set `DEMO_IT_DEBUG_LOG` to a file path before running commands:
 

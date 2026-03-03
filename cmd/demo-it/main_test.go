@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -725,6 +726,48 @@ func TestResolveRecordWorkspacePathRejectsMultiplePaths(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "at most one workspace path") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestOutputRecordedBlockWritesFile(t *testing.T) {
+	tempDir := t.TempDir()
+	outputPath := filepath.Join(tempDir, "recordings", "captured.md")
+	block := "```demo-it\ntitle: Recorded interaction\nactions:\n  - kind: key\n    key: Enter\n```"
+
+	if err := outputRecordedBlock(block, outputPath); err != nil {
+		t.Fatalf("outputRecordedBlock error: %v", err)
+	}
+
+	contents, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if string(contents) != block+"\n" {
+		t.Fatalf("unexpected output contents: %q", string(contents))
+	}
+}
+
+func TestConfirmTmuxSessionHandoffPromptsAndReadsEnter(t *testing.T) {
+	input := strings.NewReader("\n")
+	var output bytes.Buffer
+
+	if err := confirmTmuxSessionHandoff("demo-it-record", false, input, &output); err != nil {
+		t.Fatalf("confirmTmuxSessionHandoff error: %v", err)
+	}
+	if !strings.Contains(output.String(), "press Enter to open tmux session \"demo-it-record\" (use --yes to skip)") {
+		t.Fatalf("unexpected prompt output: %q", output.String())
+	}
+}
+
+func TestConfirmTmuxSessionHandoffSkipsWhenAutoConfirmEnabled(t *testing.T) {
+	input := strings.NewReader("")
+	var output bytes.Buffer
+
+	if err := confirmTmuxSessionHandoff("demo-it-record", true, input, &output); err != nil {
+		t.Fatalf("confirmTmuxSessionHandoff error: %v", err)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("expected no prompt output when auto-confirm enabled, got %q", output.String())
 	}
 }
 

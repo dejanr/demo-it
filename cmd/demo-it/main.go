@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1889,6 +1890,10 @@ func recordCommand(rawArgs []string) error {
 	fs := flag.NewFlagSet("record", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	title := fs.String("title", "Recorded interaction", "title for the generated demo-it block")
+	outputPath := fs.String("f", "", "write recorded demo-it block to file")
+	autoConfirm := fs.Bool("yes", false, "skip confirmation before entering tmux recording session")
+	fs.StringVar(outputPath, "file", "", "write recorded demo-it block to file")
+	fs.BoolVar(autoConfirm, "y", false, "skip confirmation before entering tmux recording session")
 	if err := fs.Parse(rawArgs); err != nil {
 		return err
 	}
@@ -1943,6 +1948,9 @@ func recordCommand(rawArgs []string) error {
 
 	fmt.Fprintf(os.Stderr, "recording in tmux session %q\n", recordSession)
 	fmt.Fprintln(os.Stderr, "exit the recording shell (Ctrl-D) to finish and print the demo-it block")
+	if err := confirmTmuxSessionHandoff(recordSession, *autoConfirm, os.Stdin, os.Stderr); err != nil {
+		return err
+	}
 
 	if os.Getenv("TMUX") != "" {
 		if err := runTmux("switch-client", "-t", recordSession); err != nil && !isTmuxNoCurrentClientError(err) {
@@ -1983,7 +1991,48 @@ func recordCommand(rawArgs []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(block)
+	if err := outputRecordedBlock(block, strings.TrimSpace(*outputPath)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func outputRecordedBlock(block string, outputPath string) error {
+	if strings.TrimSpace(outputPath) == "" || outputPath == "-" {
+		fmt.Println(block)
+		return nil
+	}
+
+	resolvedPath, err := filepath.Abs(outputPath)
+	if err != nil {
+		return fmt.Errorf("resolve record output path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0o755); err != nil {
+		return fmt.Errorf("create output directory for %s: %w", resolvedPath, err)
+	}
+	if err := os.WriteFile(resolvedPath, []byte(block+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write record output %s: %w", resolvedPath, err)
+	}
+	fmt.Fprintf(os.Stderr, "wrote recorded block to %s\n", resolvedPath)
+	return nil
+}
+
+func confirmTmuxSessionHandoff(sessionName string, autoConfirm bool, input io.Reader, output io.Writer) error {
+	if autoConfirm {
+		return nil
+	}
+	trimmedSession := strings.TrimSpace(sessionName)
+	if trimmedSession == "" {
+		return nil
+	}
+	if _, err := fmt.Fprintf(output, "press Enter to open tmux session %q (use --yes to skip): ", trimmedSession); err != nil {
+		return fmt.Errorf("write record confirmation prompt: %w", err)
+	}
+	_, err := bufio.NewReader(input).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("read record confirmation input: %w", err)
+	}
+	_, _ = fmt.Fprintln(output)
 	return nil
 }
 
@@ -3116,7 +3165,7 @@ const usage = `Usage:
 
 Commands:
   start [workspace-path]
-  record [--title <text>] [workspace-path]
+  record [--title <text>] [--yes] [-f <output-file.md>] [workspace-path]
   status
   run-status
   reload
@@ -3137,7 +3186,9 @@ Start behavior:
 
 Record behavior:
   record (without a path) records tmux actions in the current working directory.
-  record uses a <workspace>-record session and prints a demo-it block on stop.
+  record uses a <workspace>-record session and prompts before entering it (press Enter).
+  record --yes skips the handoff confirmation prompt.
+  record -f <file.md> writes the generated block to that file instead of stdout.
 
 Workspace mode:
   Passing a workspace path directly is equivalent to start <workspace-path>.
@@ -3149,6 +3200,8 @@ Session lifecycle:
   demo-it notes              # open notes session for active workspace
   demo-it show               # open demo session for active workspace
   demo-it trace-next         # trace active demo pane output while running next
-  demo-it record --title T   # open <workspace>-record and print recorded block when shell exits
+  demo-it record --title T   # confirm/open <workspace>-record and print recorded block when shell exits
+  demo-it record --yes > test.md   # write generated block using shell redirection
+  demo-it record --yes -f test.md  # write generated block directly to file
   demo-it kill               # kill managed sessions
 `
