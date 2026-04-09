@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,7 +10,16 @@ import (
 )
 
 func TestRunServerStartsAndStopsOnContextCancel(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "demo-itd-test.sock")
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	socketPath := filepath.Join(cwd, fmt.Sprintf("demo-itd-test-%d.sock", time.Now().UnixNano()))
+	t.Cleanup(func() {
+		_ = os.Remove(socketPath)
+	})
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan error, 1)
