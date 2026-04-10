@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -868,6 +869,9 @@ func TestRecordPaneLogLabelAndSelector(t *testing.T) {
 	if selector := recordPaneSelectorFromLogName(label + ".timing.log"); selector != "1" {
 		t.Fatalf("recordPaneSelectorFromLogName = %q, want 1", selector)
 	}
+	if selector := recordPaneSelectorFromLogName(label + ".raw.log"); selector != "1" {
+		t.Fatalf("recordPaneSelectorFromLogName raw = %q, want 1", selector)
+	}
 	if selector := recordPaneSelectorFromLogName("pane-0-1.timing.log"); selector != "" {
 		t.Fatalf("recordPaneSelectorFromLogName pane-0 should be empty selector, got %q", selector)
 	}
@@ -927,6 +931,93 @@ func TestParseRecordInputTimingUsesStartOverride(t *testing.T) {
 	want := override.Add(200 * time.Millisecond)
 	if !chunks[0].Timestamp.Equal(want) {
 		t.Fatalf("chunk timestamp = %s, want %s", chunks[0].Timestamp, want)
+	}
+}
+
+func TestParseBSDRecordInputLog(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "pane-1-12.raw.log")
+	file, err := os.Create(logPath)
+	if err != nil {
+		t.Fatalf("create raw log: %v", err)
+	}
+	writeRecord := func(length uint64, timestamp time.Time, recordType byte, payload []byte) {
+		t.Helper()
+		header := bsdScriptRecordHeader{
+			Length:       length,
+			Seconds:      uint64(timestamp.Unix()),
+			Microseconds: uint32(timestamp.Nanosecond() / 1000),
+			Type:         uint32(recordType),
+		}
+		if err := binary.Write(file, binary.LittleEndian, header); err != nil {
+			t.Fatalf("write raw log header: %v", err)
+		}
+		if _, err := file.Write(payload); err != nil {
+			t.Fatalf("write raw log payload: %v", err)
+		}
+	}
+	first := time.Date(2026, time.March, 3, 12, 0, 0, 100000000, time.UTC)
+	second := first.Add(250 * time.Millisecond)
+	writeRecord(0, first.Add(-10*time.Millisecond), 's', nil)
+	writeRecord(uint64(len([]byte("ls\n"))), first, 'i', []byte("ls\n"))
+	writeRecord(uint64(len([]byte("\t"))), second, 'i', []byte("\t"))
+	writeRecord(0, second.Add(10*time.Millisecond), 'e', nil)
+	if err := file.Close(); err != nil {
+		t.Fatalf("close raw log: %v", err)
+	}
+
+	events, err := parseBSDRecordInputLog(logPath)
+	if err != nil {
+		t.Fatalf("parseBSDRecordInputLog error: %v", err)
+	}
+	want := []recordedKeyEvent{
+		{Timestamp: first, Key: "l"},
+		{Timestamp: first, Key: "s"},
+		{Timestamp: first, Key: "Enter"},
+		{Timestamp: second, Key: "Tab"},
+	}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("parseBSDRecordInputLog = %#v, want %#v", events, want)
+	}
+}
+
+func TestParseBSDRecordInputLogResyncsAfterBSDKeyEchoByte(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "pane-1-12.raw.log")
+	first := time.Date(2026, time.March, 3, 12, 0, 0, 100000000, time.UTC)
+	second := first.Add(250 * time.Millisecond)
+	var raw bytes.Buffer
+	writeRecord := func(length uint64, timestamp time.Time, recordType byte, payload []byte) {
+		t.Helper()
+		header := bsdScriptRecordHeader{
+			Length:       length,
+			Seconds:      uint64(timestamp.Unix()),
+			Microseconds: uint32(timestamp.Nanosecond() / 1000),
+			Type:         uint32(recordType),
+		}
+		if err := binary.Write(&raw, binary.LittleEndian, header); err != nil {
+			t.Fatalf("write raw log header: %v", err)
+		}
+		if _, err := raw.Write(payload); err != nil {
+			t.Fatalf("write raw log payload: %v", err)
+		}
+	}
+	writeRecord(0, first.Add(-10*time.Millisecond), 's', nil)
+	writeRecord(1, first, 'i', []byte("h"))
+	if err := raw.WriteByte('h'); err != nil {
+		t.Fatalf("write raw log echo byte: %v", err)
+	}
+	writeRecord(1, second, 'o', []byte("h"))
+	writeRecord(0, second.Add(10*time.Millisecond), 'e', nil)
+	if err := os.WriteFile(logPath, raw.Bytes(), 0o644); err != nil {
+		t.Fatalf("write raw log: %v", err)
+	}
+
+	events, err := parseBSDRecordInputLog(logPath)
+	if err != nil {
+		t.Fatalf("parseBSDRecordInputLog error: %v", err)
+	}
+	want := []recordedKeyEvent{{Timestamp: first, Key: "h"}}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("parseBSDRecordInputLog = %#v, want %#v", events, want)
 	}
 }
 

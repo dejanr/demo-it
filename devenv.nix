@@ -83,7 +83,34 @@
   };
 
   enterShell = ''
-    export PATH="$DEVENV_ROOT/bin:$PATH"
+    local_shim_dir="$DEVENV_ROOT/.devenv/shims"
+    mkdir -p "$local_shim_dir"
+
+    cat > "$local_shim_dir/demo-it" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+binary="$DEVENV_ROOT/bin/demo-it"
+if [[ ! -x "$binary" ]]; then
+  echo "missing local demo-it build at $binary; run 'build'" >&2
+  exit 1
+fi
+exec "$binary" "$@"
+EOF
+    chmod +x "$local_shim_dir/demo-it"
+
+    cat > "$local_shim_dir/demo-itd" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+binary="$DEVENV_ROOT/bin/demo-itd"
+if [[ ! -x "$binary" ]]; then
+  echo "missing local demo-itd build at $binary; run 'build'" >&2
+  exit 1
+fi
+exec "$binary" "$@"
+EOF
+    chmod +x "$local_shim_dir/demo-itd"
+
+    export PATH="$local_shim_dir:$DEVENV_ROOT/bin:$PATH"
     export DEMO_IT_SOCKET="$DEVENV_ROOT/.devenv/demo-itd.sock"
     export DEMO_IT_REQUIRE_LOCAL_DAEMON=1
 

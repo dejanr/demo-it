@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -2084,13 +2085,6 @@ func createRecordSession(sessionName string, workspacePath string, cliPath strin
 	if err := runTmux("set-environment", "-t", sessionName, "DEMO_IT_RECORD_SCRIPT_PATH", scriptPath); err != nil {
 		return fmt.Errorf("set record script path env for %q: %w", sessionName, err)
 	}
-	defaultCommand := fmt.Sprintf("%s __record-shell", shellQuote(cliPath))
-	if err := runTmux("set-option", "-t", sessionName, "-q", "default-command", defaultCommand); err != nil {
-		return fmt.Errorf("set record default command for %q: %w", sessionName, err)
-	}
-	if err := runTmux("respawn-pane", "-k", "-t", sessionName, cliPath, "__record-shell"); err != nil {
-		return fmt.Errorf("start record shell for %q: %w", sessionName, err)
-	}
 
 	splitPaneHookCmd := fmt.Sprintf("run-shell %s", shellQuote(recordSplitEventShellCommand(cliPath, eventsPath)))
 	if err := runTmux("set-hook", "-t", sessionName, "after-split-window", splitPaneHookCmd); err != nil {
@@ -2100,7 +2094,35 @@ func createRecordSession(sessionName string, workspacePath string, cliPath strin
 	if err := runTmux("set-hook", "-t", sessionName, "after-kill-pane", killPaneHookCmd); err != nil {
 		return fmt.Errorf("set record kill-pane hook: %w", err)
 	}
+
+	defaultCommand := fmt.Sprintf("%s __record-shell", shellQuote(cliPath))
+	if err := runTmux("set-option", "-t", sessionName, "-q", "default-command", defaultCommand); err != nil {
+		return fmt.Errorf("set record default command for %q: %w", sessionName, err)
+	}
+	if err := runTmux("respawn-pane", "-k", "-t", sessionName, cliPath, "__record-shell"); err != nil {
+		return fmt.Errorf("start record shell for %q: %w", sessionName, err)
+	}
+	if err := ensureRecordSessionStaysAlive(sessionName, 250*time.Millisecond); err != nil {
+		return err
+	}
 	return nil
+}
+
+func ensureRecordSessionStaysAlive(sessionName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		exists, err := tmuxSessionExists(sessionName)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("record shell for %q exited during setup; check your shell startup files and script utility", sessionName)
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func recordEventShellCommand(cliPath string, eventsPath string, kind string) string {
@@ -2203,6 +2225,7 @@ func recordShellCommand(rawArgs []string) error {
 	paneLabel := recordPaneLogLabel(resolvedPaneID, resolvedPaneIndex)
 	inputPath := filepath.Join(inputDir, paneLabel+".in.log")
 	timingPath := filepath.Join(inputDir, paneLabel+".timing.log")
+	rawPath := filepath.Join(inputDir, paneLabel+".raw.log")
 	startPath := filepath.Join(inputDir, paneLabel+".start")
 	if err := os.WriteFile(startPath, []byte(time.Now().UTC().Format(time.RFC3339Nano)), 0o644); err != nil {
 		return fmt.Errorf("write record shell start time: %w", err)
@@ -2220,8 +2243,15 @@ func recordShellCommand(rawArgs []string) error {
 		}
 		scriptBin = resolvedScript
 	}
-	scriptCommand := shellPath + " -i"
-	cmd := exec.Command(scriptBin, "-q", "-f", "-e", "--log-in", inputPath, "--log-out", "/dev/null", "--log-timing", timingPath, "--command", scriptCommand)
+
+	scriptFlavor, err := detectScriptFlavor(scriptBin)
+	if err != nil {
+		return err
+	}
+	cmd, err := recordShellExecCommand(scriptFlavor, scriptBin, shellPath, inputPath, timingPath, rawPath)
+	if err != nil {
+		return err
+	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -2229,6 +2259,36 @@ func recordShellCommand(rawArgs []string) error {
 		return fmt.Errorf("record shell command: %w", err)
 	}
 	return nil
+}
+
+func detectScriptFlavor(scriptBin string) (string, error) {
+	output, err := exec.Command(scriptBin, "--version").CombinedOutput()
+	trimmed := strings.TrimSpace(string(output))
+	if err == nil && strings.Contains(strings.ToLower(trimmed), "util-linux") {
+		return "gnu", nil
+	}
+	if strings.Contains(strings.ToLower(trimmed), "illegal option") || strings.Contains(strings.ToLower(trimmed), "usage: script") {
+		return "bsd", nil
+	}
+	if strings.Contains(strings.ToLower(filepath.Clean(scriptBin)), "/usr/bin/script") {
+		return "bsd", nil
+	}
+	if err == nil {
+		return "gnu", nil
+	}
+	return "gnu", nil
+}
+
+func recordShellExecCommand(scriptFlavor string, scriptBin string, shellPath string, inputPath string, timingPath string, rawPath string) (*exec.Cmd, error) {
+	switch scriptFlavor {
+	case "bsd":
+		return exec.Command(scriptBin, "-q", "-F", "-r", "-k", "-t", "0", rawPath, shellPath, "-i"), nil
+	case "gnu":
+		scriptCommand := shellPath + " -i"
+		return exec.Command(scriptBin, "-q", "-f", "-e", "--log-in", inputPath, "--log-out", "/dev/null", "--log-timing", timingPath, "--command", scriptCommand), nil
+	default:
+		return nil, fmt.Errorf("unsupported script flavor %q", scriptFlavor)
+	}
 }
 
 func recordPaneLogLabel(paneID string, paneIndex string) string {
@@ -2350,6 +2410,13 @@ type recordedKeyEvent struct {
 	Key       string
 }
 
+type bsdScriptRecordHeader struct {
+	Length       uint64
+	Seconds      uint64
+	Microseconds uint32
+	Type         uint32
+}
+
 func recordedTimedActions(events []recordEvent) []timedRecordedAction {
 	actions := make([]timedRecordedAction, 0)
 	sequence := 0
@@ -2402,14 +2469,13 @@ func recordedInputTimedActions(inputDir string) ([]timedRecordedAction, error) {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".timing.log") {
+		if !strings.HasSuffix(name, ".timing.log") && !strings.HasSuffix(name, ".raw.log") {
 			continue
 		}
 
-		timingPath := filepath.Join(inputDir, name)
-		inputPath := filepath.Join(inputDir, strings.TrimSuffix(name, ".timing.log")+".in.log")
+		logPath := filepath.Join(inputDir, name)
 		paneSelector := recordPaneSelectorFromLogName(name)
-		chunkActions, err := recordedInputActionsForPane(inputPath, timingPath, paneSelector)
+		chunkActions, err := recordedInputActionsForPane(logPath, paneSelector)
 		if err != nil {
 			return nil, err
 		}
@@ -2422,12 +2488,21 @@ func recordedInputTimedActions(inputDir string) ([]timedRecordedAction, error) {
 	return actions, nil
 }
 
-func recordedInputActionsForPane(inputPath string, timingPath string, paneSelector string) ([]timedRecordedAction, error) {
-	startOverride, err := readRecordedInputStartOverride(timingPath)
+func recordedInputActionsForPane(logPath string, paneSelector string) ([]timedRecordedAction, error) {
+	if strings.HasSuffix(logPath, ".raw.log") {
+		keyEvents, err := parseBSDRecordInputLog(logPath)
+		if err != nil {
+			return nil, err
+		}
+		return recordTimedActionsFromKeyEvents(keyEvents, paneSelector), nil
+	}
+
+	inputPath := strings.TrimSuffix(logPath, ".timing.log") + ".in.log"
+	startOverride, err := readRecordedInputStartOverride(logPath)
 	if err != nil {
 		return nil, err
 	}
-	chunks, totalLength, err := parseRecordInputTiming(timingPath, startOverride)
+	chunks, totalLength, err := parseRecordInputTiming(logPath, startOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -2451,13 +2526,89 @@ func recordedInputActionsForPane(inputPath string, timingPath string, paneSelect
 			continue
 		}
 		if offset+chunk.Length > len(payload) {
-			return nil, fmt.Errorf("input payload is shorter than timing chunk lengths in %q", timingPath)
+			return nil, fmt.Errorf("input payload is shorter than timing chunk lengths in %q", logPath)
 		}
 		chunkData := payload[offset : offset+chunk.Length]
 		offset += chunk.Length
 		keyEvents = append(keyEvents, recordedKeyEventsFromInputChunk(chunkData, chunk.Timestamp)...)
 	}
 	return recordTimedActionsFromKeyEvents(keyEvents, paneSelector), nil
+}
+
+func parseBSDRecordInputLog(logPath string) ([]recordedKeyEvent, error) {
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil, fmt.Errorf("read record raw log %q: %w", logPath, err)
+	}
+
+	keyEvents := make([]recordedKeyEvent, 0)
+	offset := 0
+	for {
+		header, ok := decodeBSDRecordHeader(data, offset)
+		if !ok {
+			break
+		}
+		payloadStart := offset + bsdScriptRecordHeaderSize
+		payloadEnd := payloadStart + int(header.Length)
+		if payloadEnd > len(data) {
+			break
+		}
+		if rune(header.Type) == 'i' && payloadEnd > payloadStart {
+			timestamp := time.Unix(int64(header.Seconds), int64(header.Microseconds)*1000).UTC()
+			keyEvents = append(keyEvents, recordedKeyEventsFromInputChunk(data[payloadStart:payloadEnd], timestamp)...)
+		}
+		nextOffset, ok := nextBSDRecordOffset(data, payloadEnd)
+		if !ok {
+			break
+		}
+		offset = nextOffset
+	}
+	return keyEvents, nil
+}
+
+const bsdScriptRecordHeaderSize = 24
+
+func decodeBSDRecordHeader(data []byte, offset int) (bsdScriptRecordHeader, bool) {
+	if offset < 0 || offset+bsdScriptRecordHeaderSize > len(data) {
+		return bsdScriptRecordHeader{}, false
+	}
+	header := bsdScriptRecordHeader{
+		Length:       binary.LittleEndian.Uint64(data[offset : offset+8]),
+		Seconds:      binary.LittleEndian.Uint64(data[offset+8 : offset+16]),
+		Microseconds: binary.LittleEndian.Uint32(data[offset+16 : offset+20]),
+		Type:         binary.LittleEndian.Uint32(data[offset+20 : offset+24]),
+	}
+	if !isBSDRecordType(header.Type) {
+		return bsdScriptRecordHeader{}, false
+	}
+	if header.Microseconds >= 1_000_000 {
+		return bsdScriptRecordHeader{}, false
+	}
+	if header.Length > uint64(len(data)-(offset+bsdScriptRecordHeaderSize)) {
+		return bsdScriptRecordHeader{}, false
+	}
+	return header, true
+}
+
+func nextBSDRecordOffset(data []byte, payloadEnd int) (int, bool) {
+	if payloadEnd >= len(data) {
+		return 0, false
+	}
+	for skip := 0; skip <= 4 && payloadEnd+skip < len(data); skip++ {
+		if _, ok := decodeBSDRecordHeader(data, payloadEnd+skip); ok {
+			return payloadEnd + skip, true
+		}
+	}
+	return 0, false
+}
+
+func isBSDRecordType(value uint32) bool {
+	switch rune(value) {
+	case 's', 'o', 'i', 'e':
+		return true
+	default:
+		return false
+	}
 }
 
 func readRecordedInputStartOverride(timingPath string) (*time.Time, error) {
@@ -2686,6 +2837,7 @@ func macroKeysFromEvents(events []recordedKeyEvent) []transcript.KeyMacroKey {
 
 func recordPaneSelectorFromLogName(name string) string {
 	trimmed := strings.TrimSuffix(name, ".timing.log")
+	trimmed = strings.TrimSuffix(trimmed, ".raw.log")
 	if !strings.HasPrefix(trimmed, "pane-") {
 		return ""
 	}

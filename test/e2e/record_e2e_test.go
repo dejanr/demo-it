@@ -115,16 +115,60 @@ func TestE2ERecordWritesOutputFileFlag(t *testing.T) {
 	assertSnapshot(t, "record-echo-hello.golden", string(contents))
 }
 
+func TestE2ERecordFailsClearlyWhenShellExitsDuringSetup(t *testing.T) {
+	h := newE2EHarness(t)
+	workspace := t.TempDir()
+	exitShell := filepath.Join(t.TempDir(), "exit-shell.sh")
+	if err := os.WriteFile(exitShell, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write exit shell: %v", err)
+	}
+
+	record := startRecordProcessWithEnv(t, h, nil, []string{"SHELL=" + exitShell}, workspace)
+	defer func() {
+		if record.cmd.Process != nil {
+			_ = record.cmd.Process.Kill()
+		}
+	}()
+
+	select {
+	case err := <-record.done:
+		if err == nil {
+			t.Fatal("expected record command to fail")
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("timed out waiting for record setup failure")
+	}
+
+	stderr := record.stderr.String()
+	if !strings.Contains(stderr, "record shell for") || !strings.Contains(stderr, "exited during setup") {
+		t.Fatalf("expected clear setup failure, got stderr:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "set record kill-pane hook") {
+		t.Fatalf("expected setup failure after hooks are installed, got stderr:\n%s", stderr)
+	}
+}
+
 func startRecordProcess(t *testing.T, h *e2eHarness, args ...string) *asyncRecordProcess {
 	return startRecordProcessWithOutput(t, h, nil, args...)
 }
 
 func startRecordProcessWithOutput(t *testing.T, h *e2eHarness, stdout io.Writer, args ...string) *asyncRecordProcess {
+	return startRecordProcessWithEnv(t, h, stdout, nil, args...)
+}
+
+func startRecordProcessWithEnv(t *testing.T, h *e2eHarness, stdout io.Writer, env []string, args ...string) *asyncRecordProcess {
 	t.Helper()
 	cliArgs := append([]string{"--run-id", h.runID, "--socket", h.socketPath, "record", "--yes"}, args...)
 	cmd := exec.Command(h.cliPath, cliArgs...)
 	cmd.Dir = h.repoRoot
 	cmd.Env = setEnv(h.env, "TMUX", "1")
+	for _, entry := range env {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 {
+			t.Fatalf("invalid env override %q", entry)
+		}
+		cmd.Env = setEnv(cmd.Env, parts[0], parts[1])
+	}
 
 	process := &asyncRecordProcess{cmd: cmd, done: make(chan error, 1)}
 	if stdout != nil {

@@ -15,7 +15,7 @@ It provides:
 - common checks: `fmt`, `lint`, `tests`, `tests-e2e`, `build`, `ci`
 - shared formatting config: `treefmt.toml` (used by both `nix fmt` and `fmt`)
 - `devenv up` runs `demo-itd` with auto-reload via `.air.toml`
-- inside the devenv shell, `DEMO_IT_SOCKET` defaults to `$DEVENV_ROOT/.devenv/demo-itd.sock` and `DEMO_IT_REQUIRE_LOCAL_DAEMON=1`, so CLI commands target the local devenv daemon
+- inside the devenv shell, project-local shims for `demo-it` and `demo-itd` are placed ahead of user-profile installs on `PATH`, and `DEMO_IT_SOCKET` defaults to `$DEVENV_ROOT/.devenv/demo-itd.sock` with `DEMO_IT_REQUIRE_LOCAL_DAEMON=1`
 
 ## Home Manager module (user daemon)
 
